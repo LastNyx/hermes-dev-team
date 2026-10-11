@@ -28,17 +28,28 @@ Easiest: clone the repo, then paste the prompt in [LEARN.md](LEARN.md) into Herm
 the skills, saves the kit path to memory, and runs a smoke test. By hand:
 
 1. Clone this repo anywhere. `KIT` below is the absolute path of its `kit/` folder.
-2. Copy the four folders in `skills/` into your Hermes skills directory.
+2. `python KIT/link-skills.py` (dry run), then `python KIT/link-skills.py --apply`.
 3. In a project repo, on a feature branch:
    `python KIT/run-worker.py dev "ticket: .scratch/<feature>/issues/01-x.md" --test-cmd "<test command>"`
    prints one line, for example `RESULT dev PASS 6397d42 | turns=18 22s denials=0 | .scratch/runs/....json`.
 
 Every run appends to `.scratch/runs.log`. Commits never get a Co-Authored-By trailer.
 
-## Changing a skill or role
+## When a skill grows
 
-Edit the file in this repo (not only your local Hermes copy), add a line to [CHANGELOG.md](CHANGELOG.md) under a new
-version and mark it **re-copy** if a skill changed, then commit. Other machines `git pull` and paste LEARN.md again.
+`kit/link-skills.py` links each folder in `skills/` into Hermes' skills directory (a junction on Windows, a symlink
+elsewhere). When Hermes improves a team skill while you work, the edit lands in this repo's working tree, not a
+hidden copy. Nothing is published until you commit:
+
+1. **Work.** Let Hermes grow the skill. It is only an uncommitted change.
+2. **Review.** `git status` / `git diff skills/`. Keep what helps every project; drop anything tied to one project (paths, names).
+   `git restore skills/<name>` discards an edit.
+3. **Commit.** Add a CHANGELOG line, then commit and push.
+4. **Other machine.** `git pull`. Linked skills update at once.
+
+A skill Hermes creates from scratch lands in its own skills directory, not here. If it belongs to the team, move it
+into `skills/` and re-run `link-skills.py --apply`. To remove a linked skill, delete the link (`rmdir` on Windows),
+never the repo folder: Hermes' own delete refuses on a link by design.
 
 ## Attribution
 

@@ -1,0 +1,2 @@
+# Hermes writes CRLF on Windows; normalise so a grown skill's diff shows content, not line endings.
+* text=auto eol=lf
