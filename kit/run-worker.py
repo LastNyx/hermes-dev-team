@@ -4,6 +4,10 @@
 Usage (cwd = the project repo root):
     python <kit>/run-worker.py <role> "<prompt>" [--test-cmd "<cmd>"] [--model M] [--max-turns N]
 
+The allowed test command is found in this order: --test-cmd; for dev, the ticket's `Test command:` line
+(prompt `ticket: <path>`); then `"test"` in the project's .team.json. Models can be set per role in
+.team.json `"models": {"dev": "sonnet"}`. The feature name for the cost log comes from `.scratch/<feature>/` in the prompt.
+
 Roles live next to this file: roles/<role>.md (prompt) and roles/<role>.json (settings).
 Prints ONE line and exits 0 only when the worker's last line is `RESULT: PASS` and the guards hold.
 Every run appends a line to .scratch/runs.log and keeps the full JSON in .scratch/runs/.
@@ -13,7 +17,7 @@ Measured facts this relies on (Claude Code 2.1.296):
 - `--setting-sources ""` ignores user/project settings, so a repo's .claude/settings.json cannot widen the allow-list.
 - `Edit(path)` rules govern both Edit and Write; deny rules beat allow rules.
 """
-import argparse, datetime, json, pathlib, shutil, subprocess, sys, time
+import argparse, datetime, json, pathlib, re, shutil, subprocess, sys, time
 
 KIT = pathlib.Path(__file__).resolve().parent
 DEFAULTS = {"dev": ("sonnet", 40), "reviewer": ("sonnet", 25), "docs": ("haiku", 15)}
@@ -23,6 +27,25 @@ TOOLS = "Read,Edit,Write,Glob,Grep,Bash"
 def git(*args):
     r = subprocess.run(["git", *args], capture_output=True, text=True)
     return r.stdout.strip() if r.returncode == 0 else None
+
+
+def load_team_cfg():
+    p = pathlib.Path(".team.json")
+    if not p.exists():
+        return {}
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except ValueError as e:
+        raise SystemExit(f"RESULT ERROR .team.json is not valid JSON: {e}")
+
+
+def ticket_test_cmd(prompt):
+    m = re.search(r"ticket:\s*(\S+)", prompt)
+    if not m or not pathlib.Path(m.group(1)).exists():
+        return None
+    t = re.search(r"^Test command:\s*(.+?)\s*$", pathlib.Path(m.group(1)).read_text(encoding="utf-8"), re.M)
+    cmd = t.group(1).strip().strip("`").strip() if t else ""
+    return cmd if cmd and not cmd.startswith("<") else None
 
 
 def main():
@@ -42,17 +65,23 @@ def main():
     if git("rev-parse", "--show-toplevel") is None:
         print(f"RESULT {a.role} ERROR cwd is not a git repo"); return 2
 
+    cfg = load_team_cfg()
     model, turns = DEFAULTS.get(a.role, ("sonnet", 25))
-    model, turns = a.model or model, a.max_turns or turns
+    model = a.model or (cfg.get("models") or {}).get(a.role) or model
+    turns = a.max_turns or turns
+    test_cmd = a.test_cmd or (ticket_test_cmd(a.prompt) if a.role == "dev" else None) or \
+        (cfg.get("test") if a.role != "docs" else None)
+    fm = re.search(r"\.scratch/([^/\s]+)", a.prompt)
+    feature = fm.group(1) if fm else "-"
 
     settings = json.loads(settings_file.read_text(encoding="utf-8"))
     settings["includeCoAuthoredBy"] = False                      # always, whatever the role file says
     settings.setdefault("attribution", {}).update({"commit": "", "pr": ""})
     prompt = a.prompt
-    if a.test_cmd:
-        settings["permissions"]["allow"].append(f"Bash({a.test_cmd})")
+    if test_cmd:
+        settings["permissions"]["allow"].append(f"Bash({test_cmd})")
         # measured: without this line a reviewer ran the ticket's narrower command and was denied
-        prompt += f"\nThe only test command you may run is exactly: {a.test_cmd}"
+        prompt += f"\nThe only test command you may run is exactly: {test_cmd}"
 
     runs = pathlib.Path(".scratch/runs"); runs.mkdir(parents=True, exist_ok=True)
     stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -95,10 +124,12 @@ def main():
 
     u = d.get("usage") or {}
     line = (f"{stamp}\t{a.role}\t{model}\t{verdict}\tturns={d.get('num_turns')}\t{secs}s\t"
-            f"out={u.get('output_tokens')}\tlist$={d.get('total_cost_usd')}\tdenials={len(denials)}\t{out_path.as_posix()}")
+            f"out={u.get('output_tokens')}\tlist$={d.get('total_cost_usd')}\tdenials={len(denials)}\t{out_path.as_posix()}\t"
+            f"feature={feature}\ttest={test_cmd or '-'}")
     with open(".scratch/runs.log", "a", encoding="utf-8") as f:
         f.write(line + "\n")
-    print(f"RESULT {a.role} {verdict} | turns={d.get('num_turns')} {secs}s denials={len(denials)} | {out_path.as_posix()}")
+    print(f"RESULT {a.role} {verdict} | turns={d.get('num_turns')} {secs}s denials={len(denials)} "
+          f"test={test_cmd or '-'} | {out_path.as_posix()}")
     for x in denials[:5]:
         i = x.get("tool_input") or {}
         print(f"  denied {x.get('tool_name')}: {i.get('command') or i.get('file_path')}")

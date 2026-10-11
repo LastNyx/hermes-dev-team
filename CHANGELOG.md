@@ -5,6 +5,18 @@ mark an entry **action** when another machine must do something (re-run `link-sk
 
 Format: version, date, then one line per change, naming the file.
 
+## 0.4.0 - 2026-10-11
+
+- `.team.json` per project: `{"test": "<full test command>", "models": {"<role>": "<model>"}}`. The launcher reads it,
+  and for dev takes the test command from the ticket's `Test command:` line, so `--test-cmd` is now optional.
+  The dev role cannot edit `.team.json` (deny rule, measured). **action:** add `.team.json` to each project.
+- `kit/costs.py`: per-feature (and `--by-role`) table of runs, pass/fail, turns, minutes, tokens, list price, denials.
+  `runs.log` lines now carry `feature=` and `test=`.
+- `kit/review-skills.py`: lists grown team skills, shows the diff (new files too), warns on machine paths, drafts
+  CHANGELOG lines. Read-only; never stages anything.
+- `skills/orchestrate`: uses `.team.json` instead of retyping test commands; shows the cost table at the end of a
+  feature; asks before patching a team skill and points to `review-skills.py`.
+
 ## 0.3.0 - 2026-10-11
 
 - `kit/link-skills.py`: links `skills/*` into Hermes' skills directory, so skills that grow while you work land in

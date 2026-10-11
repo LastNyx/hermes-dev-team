@@ -19,7 +19,8 @@
    "Edit(./.claude/**)",
    "Edit(./CONTEXT.md)",
    "Edit(./docs/adr/**)",
-   "Edit(./docs/dev-notes.md)"
+   "Edit(./docs/dev-notes.md)",
+   "Edit(./.team.json)"
   ]
  },
  "includeCoAuthoredBy": false,

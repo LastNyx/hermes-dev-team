@@ -33,7 +33,11 @@ the skills, saves the kit path to memory, and runs a smoke test. By hand:
    `python KIT/run-worker.py dev "ticket: .scratch/<feature>/issues/01-x.md" --test-cmd "<test command>"`
    prints one line, for example `RESULT dev PASS 6397d42 | turns=18 22s denials=0 | .scratch/runs/....json`.
 
-Every run appends to `.scratch/runs.log`. Commits never get a Co-Authored-By trailer.
+Each project needs a committed `.team.json`, e.g. `{"test": "npm test"}` (optional `"models": {"docs": "haiku"}`).
+The dev worker takes its test command from the ticket; the reviewer uses `test` from `.team.json`.
+
+Every run appends to `.scratch/runs.log`; `python KIT/costs.py --by-role` totals it per feature.
+Commits never get a Co-Authored-By trailer.
 
 ## When a skill grows
 
@@ -42,7 +46,7 @@ elsewhere). When Hermes improves a team skill while you work, the edit lands in 
 hidden copy. Nothing is published until you commit:
 
 1. **Work.** Let Hermes grow the skill. It is only an uncommitted change.
-2. **Review.** `git status` / `git diff skills/`. Keep what helps every project; drop anything tied to one project (paths, names).
+2. **Review.** `python kit/review-skills.py` (diff, machine-path warnings, draft CHANGELOG lines). Keep what helps every project; drop anything tied to one project (paths, names).
    `git restore skills/<name>` discards an edit.
 3. **Commit.** Add a CHANGELOG line, then commit and push.
 4. **Other machine.** `git pull`. Linked skills update at once.
