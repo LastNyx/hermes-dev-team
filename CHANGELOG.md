@@ -5,6 +5,15 @@ mark an entry **action** when another machine must do something (re-run `link-sk
 
 Format: version, date, then one line per change, naming the file.
 
+## 0.5.1 - 2026-10-12
+
+- `skills/orchestrate`: step 2 stops if a ticket lacks Matt's `**Blocked by:**` or `**Status:**` line (upstream
+  format changed) instead of guessing.
+- `docs/design.md` decision 16: protecting test config stops passing-by-config; it does not close the
+  code-execution hole. Lists files to add to `protected` (conftest.py, jest setupFiles, scripts a test script calls).
+- Matt Pocock skill versions known to work with step 2 (sha256 of SKILL.md, first 12): grill-with-docs 7de372c13488,
+  grilling befdff1e27a1, domain-modeling 7b925d7b1e34, to-tickets 56ec23c5b278. If to-tickets changes, re-check step 2.
+
 ## 0.5.0 - 2026-10-12
 
 - **action (every machine):** `git pull`, then `python kit/link-skills.py` and `--apply`. It removes the now-dangling
