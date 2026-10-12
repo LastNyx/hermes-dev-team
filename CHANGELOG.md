@@ -5,6 +5,26 @@ mark an entry **action** when another machine must do something (re-run `link-sk
 
 Format: version, date, then one line per change, naming the file.
 
+## 0.5.0 - 2026-10-12
+
+- **action (every machine):** `git pull`, then `python kit/link-skills.py` and `--apply`. It removes the now-dangling
+  `grill-with-docs` and `to-tickets` links and prints a `MISSING` line per Matt Pocock skill you lack; install each with
+  `hermes skills install skills-sh/mattpocock/skills/<name> --yes` (grill-with-docs, grilling, domain-modeling,
+  to-tickets). Or paste LEARN.md again; step 3 covers it.
+- `skills/grill-with-docs`, `skills/to-tickets`: removed. The planner uses Matt Pocock's originals, which keep the
+  scenario and code cross-check steps the rewrites dropped, and keep updating upstream.
+- `skills/orchestrate` 0.3.0: new step 2 adds the worker header (`templates/ticket-header.md.template`: Lane, Branch,
+  Status, Round, Blocked by, Terms, Seam, Test command) to tickets from Matt's `to-tickets`; glossary is `CONTEXT.md`
+  if present, else `GLOSSARY.md`; never patch Matt's skills.
+- `kit/run-worker.py`: pastes the project's `CLAUDE.md` with `@` imports inlined into every worker prompt (measured:
+  `--setting-sources ""` hides it). Denies dev edits to package/lock/test-config files and `.team.json`
+  (`Edit(**/<name>)`), and FAILs a run with `guard:test-config-changed` if one changed anyway. `.team.json` may add
+  `"protected": [globs]`.
+- `kit/link-skills.py`: removes dangling links into the repo, skips folders without SKILL.md, reports missing
+  upstream (Matt) skills with the install command.
+- `kit/roles/dev.md`, `reviewer.md`, `docs.md`, `dev.json`: glossary may be `CONTEXT.md` or `GLOSSARY.md`; dev FAILs
+  with `needs <file> change` instead of touching protected files.
+
 ## 0.4.0 - 2026-10-11
 
 - `.team.json` per project: `{"test": "<full test command>", "models": {"<role>": "<model>"}}`. The launcher reads it,

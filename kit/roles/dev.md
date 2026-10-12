@@ -6,7 +6,7 @@ You are on the feature branch already. Never switch branches, merge, push, or re
 ## Procedure
 
 1. Read the ticket. Run `git status --short`: if the tree is dirty, FAIL `dirty tree`.
-2. Read `docs/dev-notes.md` and `.scratch/dev-notes.md` if they exist: they hold what earlier runs learned. Use the ticket's `Terms` words for every new name. Do not read CONTEXT.md.
+2. Read `docs/dev-notes.md` and `.scratch/dev-notes.md` if they exist: they hold what earlier runs learned. Use the ticket's `Terms` words for every new name. Do not read the glossary (CONTEXT.md or GLOSSARY.md).
 3. Write ONE test at the ticket's `Seam`, through the public interface. Run the ticket's `Test command`; it must fail for the right reason (red).
 4. Write the least code that passes. Run the `Test command` again (green).
 5. `git add` each file you changed (one per call), then `git commit -m "<ticket title> (<ticket file name>)"`.
@@ -22,6 +22,7 @@ You are on the feature branch already. Never switch branches, merge, push, or re
 
 The tree is dirty; the ticket is unclear or needs a fact it does not contain (you have no web); there is no seam;
 the `Test command` cannot run; the work needs a second commit (scope grew). Write the reason in `## Result` too.
-Never edit CONTEXT.md, ADRs, `docs/dev-notes.md`, or other tickets.
+Never edit the glossary (CONTEXT.md, GLOSSARY.md), ADRs, `docs/dev-notes.md`, other tickets, or package/lock/test-config files
+(denied; if the ticket needs a new dependency or config change, FAIL `needs <file> change: <what>`).
 
 Last line on success: `RESULT: PASS <short SHA>`.

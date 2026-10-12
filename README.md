@@ -12,7 +12,9 @@ actions; see [docs/design.md](docs/design.md). It has not yet been used on a rea
 
 - [TEAM.md](TEAM.md): the roles on one page.
 - `kit/run-worker.py`: the launcher. `kit/roles/<role>.md` + `<role>.json`: each worker's prompt and permissions.
-- `skills/`: four Hermes skills for the planner (grill-with-docs, to-tickets, orchestrate, claude-p-role-workers).
+- `skills/`: two Hermes skills for the planner (orchestrate, claude-p-role-workers).
+- Planning uses [Matt Pocock's skills](https://github.com/mattpocock/skills) as-is, installed from the Hermes skill hub
+  (not vendored, so they keep updating): grill-with-docs, grilling, domain-modeling, to-tickets.
 - [LEARN.md](LEARN.md): a prompt to paste into Hermes on another machine so it installs and learns this repo.
 - [CHANGELOG.md](CHANGELOG.md): every skill, role, or launcher change; marks what to re-copy after `git pull`.
 - [docs/design.md](docs/design.md): decisions, measurements, and what was rejected.
@@ -28,12 +30,17 @@ Easiest: clone the repo, then paste the prompt in [LEARN.md](LEARN.md) into Herm
 the skills, saves the kit path to memory, and runs a smoke test. By hand:
 
 1. Clone this repo anywhere. `KIT` below is the absolute path of its `kit/` folder.
-2. `python KIT/link-skills.py` (dry run), then `python KIT/link-skills.py --apply`.
+2. `python KIT/link-skills.py` (dry run), then `python KIT/link-skills.py --apply`. It links the team skills and
+   prints a `MISSING` line with the install command for each of Matt's skills you do not have:
+   `hermes skills install skills-sh/mattpocock/skills/<name> --yes` for grill-with-docs, grilling, domain-modeling, to-tickets.
 3. In a project repo, on a feature branch:
    `python KIT/run-worker.py dev "ticket: .scratch/<feature>/issues/01-x.md" --test-cmd "<test command>"`
    prints one line, for example `RESULT dev PASS 6397d42 | turns=18 22s denials=0 | .scratch/runs/....json`.
 
-Each project needs a committed `.team.json`, e.g. `{"test": "npm test"}` (optional `"models": {"docs": "haiku"}`).
+Each project needs a committed `.team.json`, e.g. `{"test": "npm test"}` (optional `"models": {"docs": "haiku"}`,
+`"protected": ["<file-name glob>"]`). The dev worker can never edit `package.json`, lockfiles, jest/vitest/tsconfig
+files or `.team.json` (they decide what the test command runs); the planner makes those changes.
+The launcher pastes the project's `CLAUDE.md`, with `@` imports inlined, into every worker's prompt.
 The dev worker takes its test command from the ticket; the reviewer uses `test` from `.team.json`.
 
 Every run appends to `.scratch/runs.log`; `python KIT/costs.py --by-role` totals it per feature.

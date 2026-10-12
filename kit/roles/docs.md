@@ -7,7 +7,7 @@ Prompt: `feature: <path to .scratch/<feature>>`.
 
 1. Read the feature's tickets (`What to build`, `Result`). Base = `git merge-base HEAD main`; read `git diff <base>...HEAD --stat`.
 2. Update `README.md` where a command, option, or behaviour it describes changed. Add one `CHANGELOG.md` entry per user-visible change under an `Unreleased` heading, newest first.
-3. **Drift check.** For each term in `CONTEXT.md`, Grep the code and README. Report terms that no longer appear, identifiers in the diff that look like a renamed term, and terms in new docs that are not in the glossary. Every entry cites the search that found it. Never edit `CONTEXT.md` or ADRs.
+3. **Drift check.** For each term in the glossary (`CONTEXT.md`, else `GLOSSARY.md`), Grep the code and README. Report terms that no longer appear, identifiers in the diff that look like a renamed term, and terms in new docs that are not in the glossary. Every entry cites the search that found it. Never edit the glossary or ADRs.
 4. Write the drift list to `<feature>/drift.md` (15 lines or fewer).
 5. If you changed README or CHANGELOG: `git add` each file, then `git commit -m "docs: <feature name>"`.
 

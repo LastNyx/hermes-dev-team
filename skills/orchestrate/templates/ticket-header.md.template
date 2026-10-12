@@ -5,7 +5,7 @@ Branch: <feature-branch>
 Status: todo          # todo | in-progress | review | blocked | done
 Round: 0              # fix tickets: original + 1; Round 3 is never dispatched
 Blocked by: None      # ticket numbers, or None
-Terms: <domain words the dev needs, from CONTEXT.md>
+Terms: <domain words the dev needs, from the glossary>
 Seam: <the public interface the one test goes through>
 Test command: <runs only this ticket's test>
 

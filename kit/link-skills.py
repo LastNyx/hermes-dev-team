@@ -10,6 +10,9 @@ Without --apply it only reports what it would do. For each folder in <repo>/skil
 - a plain copy, identical    -> replace it with a link
 - a plain copy, different    -> SKIP and report: the local copy grew, so merge it into the repo first, then re-run
 - a link pointing elsewhere  -> SKIP and report
+Also: removes dangling links that point into this repo's skills/ (a skill the repo dropped), and reports any of
+Matt Pocock's planning skills (UPSTREAM) that are not installed, with the install command. Exit 1 if anything
+was skipped or missing.
 
 Measured with Hermes skill_manage (2026-10-11): patch, write_file and full rewrite all write through a junction
 and keep the link; delete refuses on a junction (remove the link with `rmdir` on Windows, `rm` elsewhere).
@@ -17,6 +20,9 @@ and keep the link; delete refuses on a junction (remove the link with `rmdir` on
 import argparse, filecmp, os, pathlib, subprocess, sys
 
 REPO_SKILLS = pathlib.Path(__file__).resolve().parent.parent / "skills"
+# Matt Pocock's planning skills (github.com/mattpocock/skills), used as-is by the planner. Not vendored here, so
+# they keep updating from upstream. grill-with-docs calls grilling + domain-modeling, so all three are needed.
+UPSTREAM = ["grill-with-docs", "grilling", "domain-modeling", "to-tickets"]
 
 
 def default_skills_dir():
@@ -77,7 +83,7 @@ def main():
     nested = {}
     for skill_md in dest.glob("*/*/SKILL.md"):
         nested.setdefault(skill_md.parent.name, []).append(skill_md.parent)
-    for src in sorted(p for p in REPO_SKILLS.iterdir() if p.is_dir()):
+    for src in sorted(p for p in REPO_SKILLS.iterdir() if (p / "SKILL.md").is_file()):  # git leaves empty dirs
         local = dest / src.name
         if not os.path.lexists(local) and src.name in nested:
             where = ", ".join(str(p.relative_to(dest)) for p in nested[src.name])
@@ -101,9 +107,23 @@ def main():
             if os.path.lexists(local):
                 remove_copy(local)
             make_link(local, src.resolve())
+    # Links left behind by skills the repo no longer has (e.g. grill-with-docs and to-tickets, removed in 0.5.0).
+    # They point into this repo but the target is gone, so Hermes sees a broken skill. Only such links are removed.
+    repo_root = REPO_SKILLS.resolve()
+    for entry in sorted(dest.iterdir()):
+        tgt = link_target(entry)
+        if tgt is None or tgt.exists() or repo_root not in tgt.parents:
+            continue
+        print(f"  {'do' if a.apply else 'would'}    {entry.name}: remove dangling link (skill removed from the repo)")
+        if a.apply:
+            os.rmdir(entry) if os.name == "nt" else os.unlink(entry)   # removes the link only, never a target
+    # Planning skills come from Matt Pocock's repo, not this one. Report what is missing; install nothing here.
+    missing = [s for s in UPSTREAM if not (dest / s / "SKILL.md").exists() and s not in nested]
+    for s in missing:
+        print(f"  MISSING {s}: install with  hermes skills install skills-sh/mattpocock/skills/{s} --yes")
     if skipped:
         print(f"{skipped} skipped; nothing was overwritten.")
-    return 1 if skipped else 0
+    return 1 if (skipped or missing) else 0
 
 
 if __name__ == "__main__":

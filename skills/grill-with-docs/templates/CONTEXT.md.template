@@ -1,7 +1,0 @@
-# <Project> glossary
-
-One line per term. Words to avoid go in the second column. Not a design doc.
-
-| Term | Meaning | Avoid |
-|---|---|---|
-| <term> | <one-line meaning> | <synonyms we reject> |

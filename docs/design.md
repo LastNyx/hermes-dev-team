@@ -31,6 +31,9 @@ repo with Claude Code 2.1.296.
 | 12 | Review before merge, on two separate axes (Spec, Standards) | A reviewer run after the merge saw an empty diff. Axes stay separate so one cannot hide the other. |
 | 13 | Dev notes: workers append to `.scratch/dev-notes.md`; the planner promotes approved facts to `docs/dev-notes.md` with the user's say-so | Later runs reuse what earlier runs learned without polluting the repo with unreviewed text. |
 | 14 | Every run logs one line to `.scratch/runs.log` | Turns, seconds, tokens, list price, denials: enough to see cost and drift without transcripts. |
+| 15 | The launcher inlines the project's `CLAUDE.md` (and its `@` imports) into the worker prompt | Measured: with `--setting-sources ""` a worker does not see `CLAUDE.md` at all (codeword test: NONE vs found with `project`). An `@../other-repo/CLAUDE.md` import points outside the repo, where the worker may not read. With inlining, a worker followed a naming rule that lived only in the imported file. |
+| 16 | The dev may not edit files that decide what the test command runs (`package.json`, lockfiles, jest/vitest/tsconfig, `.team.json`, plus `.team.json` `protected`): deny rule `Edit(**/<name>)` plus a post-run guard | Otherwise a dev can rewrite the `test` script and the allowed test command runs anything. Measured: the deny blocked root and nested files for Edit and Write; the guard (`FAIL guard:test-config-changed`) caught a committed change. |
+| 17 | Planning uses Matt Pocock's skills as installed, not rewrites | The 0.2.0 rewrites dropped the scenario and code-cross-check steps and shadowed the upstream names. The team only needs extra ticket fields, which `orchestrate` adds from `templates/ticket-header.md.template`. |
 
 ## Measured (end to end, toy repo)
 
@@ -43,6 +46,8 @@ repo with Claude Code 2.1.296.
 | `git commit -m x --amend` | allowed by the prefix rule, caught by the launcher guard: `FAIL guard:history-rewritten` |
 
 ## Known holes
+
+- Protected-file matching is by file name. A test runner configured somewhere else (e.g. a custom script path) needs that file in `.team.json` `protected`.
 
 - The test command executes code the dev wrote, so a dev can run anything through it. Review before merge is the defence.
 - Amend is detected after the fact, not prevented; recovery is `git reflog`.

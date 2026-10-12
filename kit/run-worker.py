@@ -17,16 +17,53 @@ Measured facts this relies on (Claude Code 2.1.296):
 - `--setting-sources ""` ignores user/project settings, so a repo's .claude/settings.json cannot widen the allow-list.
 - `Edit(path)` rules govern both Edit and Write; deny rules beat allow rules.
 """
-import argparse, datetime, json, pathlib, re, shutil, subprocess, sys, time
+import argparse, datetime, fnmatch, json, pathlib, re, shutil, subprocess, sys, time
 
 KIT = pathlib.Path(__file__).resolve().parent
 DEFAULTS = {"dev": ("sonnet", 40), "reviewer": ("sonnet", 25), "docs": ("haiku", 15)}
 TOOLS = "Read,Edit,Write,Glob,Grep,Bash"
+# Files that decide what the allowed test command runs. If a worker could edit them, the test command would run
+# anything (e.g. a rewritten "test" script). Denied in roles/dev.json AND checked after every run (guard).
+# A project adds more with .team.json "protected": ["glob", ...]; globs match the file name at any depth.
+PROTECTED = ["package.json", "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "bun.lockb",
+             "jest.config.*", "vitest.config.*", "tsconfig*.json", "babel.config.*", ".babelrc",
+             "pyproject.toml", "setup.cfg", "pytest.ini", "tox.ini", "Makefile", ".team.json"]
+MAX_IMPORT_DEPTH = 5
 
 
 def git(*args):
     r = subprocess.run(["git", *args], capture_output=True, text=True)
     return r.stdout.strip() if r.returncode == 0 else None
+
+
+def project_memory(path, depth=0, seen=None):
+    """Return CLAUDE.md with its `@path` import lines inlined.
+
+    Measured: with --setting-sources "" the worker does not load the project's CLAUDE.md at all, and an import such as
+    `@../other-repo/CLAUDE.md` points outside the repo, where the worker may not read. So the launcher inlines it.
+    """
+    seen = seen if seen is not None else set()
+    path = path.resolve()
+    if depth > MAX_IMPORT_DEPTH or path in seen or not path.is_file():
+        return ""
+    seen.add(path)
+    out = []
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        m = re.fullmatch(r"\s*@(\S+)\s*", line)
+        if m:
+            target = (path.parent / pathlib.Path(m.group(1)).expanduser()).resolve()
+            body = project_memory(target, depth + 1, seen)
+            out.append(f"<!-- imported from {m.group(1)} -->\n{body}" if body else line)
+        else:
+            out.append(line)
+    return "\n".join(out)
+
+
+def protected_changes(head_before, patterns):
+    """Protected files changed by commits since head_before, or left modified in the tree."""
+    names = (git("diff", "--name-only", f"{head_before}..HEAD") or "").splitlines() if head_before else []
+    names += [l[3:].strip().strip('"') for l in (git("status", "--porcelain") or "").splitlines() if l.strip()]
+    return sorted({n for n in names if any(fnmatch.fnmatch(pathlib.PurePosixPath(n).name, p) for p in patterns)})
 
 
 def load_team_cfg():
@@ -77,6 +114,9 @@ def main():
     settings = json.loads(settings_file.read_text(encoding="utf-8"))
     settings["includeCoAuthoredBy"] = False                      # always, whatever the role file says
     settings.setdefault("attribution", {}).update({"commit": "", "pr": ""})
+    protected = PROTECTED + list(cfg.get("protected") or [])
+    # measured: Edit(**/<name>) denies the file at the root and in subfolders, for both Edit and Write
+    settings["permissions"].setdefault("deny", []).extend(f"Edit(**/{p})" for p in protected)
     prompt = a.prompt
     if test_cmd:
         settings["permissions"]["allow"].append(f"Bash({test_cmd})")
@@ -86,13 +126,17 @@ def main():
     runs = pathlib.Path(".scratch/runs"); runs.mkdir(parents=True, exist_ok=True)
     stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     out_path, agents_path = runs / f"{stamp}-{a.role}.json", runs / f"{stamp}-{a.role}.agents.json"
+    rules = project_memory(pathlib.Path("CLAUDE.md"))
+    rules_block = ("\n\n## Project rules (the repo's CLAUDE.md, imports inlined; they bind you unless a tool rule "
+                   "below forbids the action)\n\n" + rules.strip() + "\n") if rules.strip() else ""
     agents_path.write_text(json.dumps({a.role: {
         "description": f"{a.role} worker",
-        "prompt": prompt_file.read_text(encoding="utf-8").rstrip() + "\n\n"
+        "prompt": prompt_file.read_text(encoding="utf-8").rstrip() + rules_block + "\n\n"
                   + (KIT / "roles" / "_tool-rules.md").read_text(encoding="utf-8")}}), encoding="utf-8")
 
     main_before, branch_before = git("rev-parse", "main"), git("branch", "--show-current")
     head_before = git("rev-parse", "HEAD")
+    protected_before = set(protected_changes(None, protected))   # already dirty before the run: not the worker's
     if branch_before in ("main", "master"):
         print(f"RESULT {a.role} ERROR refusing to run on {branch_before}; check out the feature branch"); return 2
     cmd = ["claude", "-p", prompt, "--agents", str(agents_path), "--agent", a.role, "--tools", TOOLS,
@@ -115,6 +159,9 @@ def main():
     if git("branch", "--show-current") != branch_before: guards.append("branch-changed")
     if head_before and git("merge-base", "--is-ancestor", head_before, "HEAD") is None:
         guards.append("history-rewritten")                     # amend/reset dropped the old tip
+    touched = [n for n in protected_changes(head_before, protected) if n not in protected_before]
+    if touched:
+        guards.append("test-config-changed:" + "+".join(touched[:3]))
 
     if d.get("subtype") == "error_max_turns": verdict = "FAIL turn-cap"
     elif last.startswith("RESULT: PASS") and not guards: verdict = "PASS" + last[len("RESULT: PASS"):]

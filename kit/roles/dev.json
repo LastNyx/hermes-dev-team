@@ -18,6 +18,8 @@
    "Edit(./.git/**)",
    "Edit(./.claude/**)",
    "Edit(./CONTEXT.md)",
+   "Edit(./GLOSSARY.md)",
+   "Edit(**/GLOSSARY.md)",
    "Edit(./docs/adr/**)",
    "Edit(./docs/dev-notes.md)",
    "Edit(./.team.json)"

@@ -18,7 +18,13 @@ Learn the hermes-dev-team repo at <REPO>. Do these steps in order and stop to as
      <REPO>/skills/<name>. Ask whether to merge my changes into the repo copy first. Never discard my changes.
      After merging, run link-skills again with `--apply`.
    - Never delete a local skill that the repo does not have.
-   Then confirm with skills_list that grill-with-docs, to-tickets, orchestrate, and claude-p-role-workers appear.
+   - A "remove dangling link" line is expected after a pull that dropped a skill: the link points into <REPO>
+     at a folder that no longer exists. --apply removes the link only.
+   - A "MISSING <name>" line means one of Matt Pocock's planning skills is not installed. Ask me once for all of
+     them, then run the printed `hermes skills install skills-sh/mattpocock/skills/<name> --yes` for each.
+     Never copy them into <REPO>, never edit them.
+   Then confirm with skills_list that orchestrate, claude-p-role-workers, grill-with-docs, grilling,
+   domain-modeling, and to-tickets appear, and that grill-with-docs and to-tickets are NOT links into <REPO>.
 4. Save one memory fact: "hermes-dev-team kit is at <REPO>/kit; workers run via `python <REPO>/kit/run-worker.py`;
    team skills are linked into the repo, so skill edits show in `git -C <REPO> status`; agent commits never carry a
    Co-Authored-By trailer." Replace any older entry about hermes-dev-team instead of adding a second.
