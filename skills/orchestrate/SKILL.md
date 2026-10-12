@@ -44,10 +44,12 @@ exists; never create the second one.
 1. **Branch.** Create the feature branch from main. Add `.scratch/` to `.git/info/exclude`. Commit the glossary and ADRs on the branch as `docs: context`. The launcher refuses to run on main or master.
 2. **Make tickets dispatchable.** `to-tickets` writes `.scratch/<feature>/issues/NN-slug.md` with `**Blocked by:**` and `**Status:**` lines. First check the format: if a ticket lacks either the `**Blocked by:**` or the `**Status:**` line, stop and tell the user that Matt's `to-tickets` format has changed upstream and step 2 needs updating; do not guess. Before the first dispatch, replace those two lines in each ticket with the header in this skill's `templates/ticket-header.md.template` (`skill_view` with file_path): `Lane`, `Branch`, `Status: todo`, `Round: 0`, `Blocked by`, `Terms`, `Seam`, `Test command`. Keep the body and its acceptance criteria. A worker has no web and cannot ask: put every fact it needs in the ticket. Show the user the Seam and Test command per ticket in one list; they approve before step 3. The launcher reads only the plain `Test command:` line.
 3. **Pick** the next `todo` ticket whose `Blocked by` tickets are all `done`. Set it `in-progress` yourself; workers never change a ticket's Status.
-4. **Dispatch dev** with `terminal(background=true, notify=true)`, cwd = the repo:
-   `python KIT/run-worker.py dev "ticket: .scratch/<feature>/issues/NN-slug.md"`
+4. **Dispatch dev** with `terminal(background=true, heartbeat=120)`, cwd = the repo:
+   `python -u KIT/run-worker.py dev "ticket: .scratch/<feature>/issues/NN-slug.md"`
    The launcher takes the test command from the ticket's `Test command:` line (or `.team.json`), so do not retype it.
-   End your turn; you resume when it exits.
+   Tell the user the `progress:` path from the `START` line, then end your turn; never `process wait` (it blocks the
+   heartbeats). A heartbeat shows the worker's new tool-call lines: answer it in one short line with no tool calls
+   (each one is a planner turn, so keep it cheap). Act only on the exit notice. Use the same dispatch for steps 8 and 9.
 5. **Read the one result line**: `RESULT dev PASS <sha> | ...` or `RESULT dev FAIL <reason> | ...`, with any denied calls listed under it. Exit 0 means PASS and the guards held (main unmoved, branch unchanged, no history rewrite, no protected file changed). Never trust a bare `claude` exit code: it is 0 even when a worker gives up.
 6. **Verify** with 3 commands: `git log --stat -1`, the ticket's `Test command`, `git status --short`. On PASS set the ticket `review` (quick lane: `done`). On FAIL set it `blocked` and tell the user the reason line.
 7. Repeat 3-6 until every ticket is `review`.

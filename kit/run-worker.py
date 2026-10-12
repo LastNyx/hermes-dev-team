@@ -9,8 +9,10 @@ The allowed test command is found in this order: --test-cmd; for dev, the ticket
 .team.json `"models": {"dev": "sonnet"}`. The feature name for the cost log comes from `.scratch/<feature>/` in the prompt.
 
 Roles live next to this file: roles/<role>.md (prompt) and roles/<role>.json (settings).
-Prints ONE line and exits 0 only when the worker's last line is `RESULT: PASS` and the guards hold.
-Every run appends a line to .scratch/runs.log and keeps the full JSON in .scratch/runs/.
+While the worker runs, prints one progress line per tool call (and per permission denial) and writes the same lines
+to .scratch/runs/<stamp>-<role>.progress.log. The LAST line printed is always the RESULT line; exit 0 only when the
+worker's last line is `RESULT: PASS` and the guards hold.
+Every run appends a line to .scratch/runs.log and keeps the final result event (JSON) in .scratch/runs/.
 
 Measured facts this relies on (Claude Code 2.1.296):
 - `claude -p` exits 0 even when the worker gives up, so the RESULT line is parsed here.
@@ -85,6 +87,69 @@ def ticket_test_cmd(prompt):
     return cmd if cmd and not cmd.startswith("<") else None
 
 
+def tool_line(name, inp):
+    """One short progress line for a tool call."""
+    path = inp.get("file_path") or inp.get("path")
+    if path:                                        # absolute paths inside the repo -> repo-relative
+        try:
+            path = pathlib.Path(path).resolve().relative_to(pathlib.Path.cwd().resolve()).as_posix()
+        except (ValueError, OSError):
+            pass
+    arg = inp.get("command") or path or inp.get("pattern") or ""
+    if inp.get("pattern") and path:
+        arg = f"{inp['pattern']} in {path}"
+    arg = " ".join(str(arg).split())
+    return f"{name} {arg[:120]}"
+
+
+def stream_worker(cmd, progress_path):
+    """Run claude with stream-json, print + log one line per tool call and per denial; return the final result event.
+
+    The final `result` event carries the same fields as --output-format json (subtype, result, num_turns, usage,
+    total_cost_usd, permission_denials). Progress lines go to stdout (flushed, so a background heartbeat sees them)
+    and to progress_path; the RESULT line printed by main() stays the last line.
+    """
+    t0, final, names = time.time(), None, {}
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                            encoding="utf-8", errors="replace")
+    with open(progress_path, "w", encoding="utf-8") as log:
+        def emit(msg):
+            s = f"  [{round(time.time() - t0):>4}s] {msg}"
+            print(s, flush=True); log.write(s + "\n"); log.flush()
+        for raw in proc.stdout:
+            try:
+                ev = json.loads(raw)
+                if not isinstance(ev, dict):
+                    continue
+                if ev.get("type") == "result":
+                    final = ev
+                    continue
+                # measured (2.1.296): a denied call comes back as a tool_result "This command requires approval" with
+                # tool_result_meta[].permission_decision.decision == "reject"; the wording mentions neither "denied"
+                # nor "permission", so match the structured field first.
+                rejected = {m.get("id") for m in ev.get("tool_result_meta") or [] if isinstance(m, dict)
+                            and (m.get("permission_decision") or {}).get("decision") == "reject"}
+                msg = ev.get("message")
+                content = msg.get("content") if isinstance(msg, dict) else None
+                for c in content if isinstance(content, list) else []:
+                    if not isinstance(c, dict):
+                        continue
+                    if c.get("type") == "tool_use":
+                        names[c.get("id")] = c.get("name")
+                        emit(tool_line(c.get("name"), c.get("input") or {}))
+                    elif c.get("type") == "tool_result" and c.get("is_error"):
+                        body = c.get("content")
+                        body = body if isinstance(body, str) else json.dumps(body)
+                        low = body.lower()
+                        if c.get("tool_use_id") in rejected or "requires approval" in low or "permission" in low:
+                            emit(f"DENIED {names.get(c.get('tool_use_id'), '?')}: {' '.join(body.split())[:100]}")
+            except Exception:                          # progress is best-effort; never let it kill the run
+                continue
+    err = proc.stderr.read()
+    proc.wait()
+    return final or {"subtype": "unparsed", "result": err.strip()[-300:]}
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("role")
@@ -141,15 +206,13 @@ def main():
         print(f"RESULT {a.role} ERROR refusing to run on {branch_before}; check out the feature branch"); return 2
     cmd = ["claude", "-p", prompt, "--agents", str(agents_path), "--agent", a.role, "--tools", TOOLS,
            "--settings", json.dumps(settings), "--setting-sources", "", "--model", model,
-           "--max-turns", str(turns), "--output-format", "json", "--no-session-persistence"]
+           "--max-turns", str(turns), "--output-format", "stream-json", "--verbose", "--no-session-persistence"]
+    progress_path = runs / f"{stamp}-{a.role}.progress.log"
+    print(f"START {a.role} {model} max-turns={turns} | progress: {progress_path.as_posix()}", flush=True)
     t0 = time.time()
-    proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    d = stream_worker(cmd, progress_path)
     secs = round(time.time() - t0)
-    out_path.write_text(proc.stdout, encoding="utf-8")
-    try:
-        d = json.loads(proc.stdout)
-    except ValueError:
-        d = {"subtype": "unparsed", "result": proc.stderr.strip()[-300:]}
+    out_path.write_text(json.dumps(d), encoding="utf-8")
 
     lines = (d.get("result") or "").strip().splitlines()
     last = lines[-1].strip() if lines else ""

@@ -48,8 +48,11 @@ The allowed test command runs code the worker wrote, so it can execute anything.
 
 ## Launching from Hermes
 
-Run the launcher with `terminal(background=true, notify=true)`, then wait for the process. Read the RESULT line, not the
-exit code alone. Never keep the terminal's working directory inside a throwaway repo you delete: later calls fail.
+Run the launcher with `python -u` and `terminal(background=true, heartbeat=120)`, then end the turn. The launcher prints
+one flushed line per tool call and per denial (also in `.scratch/runs/<stamp>-<role>.progress.log`); heartbeats carry
+only new lines. Measured: a heartbeat is queued while the planner sits in `process wait`, so waiting hides progress.
+Each heartbeat costs one planner turn; 120 s means a typical 90 s run costs none. Read the RESULT line (always the last
+line), not the exit code alone. Never keep the terminal's working directory inside a throwaway repo you delete: later calls fail.
 
 ## Process lesson
 

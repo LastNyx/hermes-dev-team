@@ -5,6 +5,18 @@ mark an entry **action** when another machine must do something (re-run `link-sk
 
 Format: version, date, then one line per change, naming the file.
 
+## 0.6.0 - 2026-10-12
+
+- `kit/run-worker.py`: live progress. The worker runs with `--output-format stream-json --verbose`; the launcher prints
+  `START <role> <model>` first, then one line per tool call (`[  12s] Edit calc.py`) and per denial
+  (`[   3s] DENIED Bash: This command requires approval`), flushed, and writes the same lines to
+  `.scratch/runs/<stamp>-<role>.progress.log` (tail it). The RESULT line is still the LAST line, so parsing is
+  unchanged; `.scratch/runs/<stamp>-<role>.json` now holds the final `result` event (same fields as before), so
+  `costs.py` is unchanged. Progress parsing is best-effort and cannot fail a run.
+- `skills/orchestrate` step 4, `skills/claude-p-role-workers`: dispatch with `python -u` and
+  `terminal(background=true, heartbeat=120)`, end the turn, never `process wait` (it holds heartbeats back); answer a
+  heartbeat in one line with no tool calls. Linked skills update on `git pull`; nothing to re-run.
+
 ## 0.5.1 - 2026-10-12
 
 - `skills/orchestrate`: step 2 stops if a ticket lacks Matt's `**Blocked by:**` or `**Status:**` line (upstream
