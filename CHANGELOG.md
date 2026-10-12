@@ -5,6 +5,17 @@ mark an entry **action** when another machine must do something (re-run `link-sk
 
 Format: version, date, then one line per change, naming the file.
 
+## 0.7.0 - 2026-10-12
+
+- `skills/orchestrate` steps 2, 7, 8: review per **batch** instead of once per feature. Step 2 proposes batches (one
+  milestone each, at most 4 tickets) for the user to approve and records them in `.scratch/<feature>/batches.md`; step 8
+  reviews a batch as soon as its tickets are all `review`, with `batch: <b> tickets: NN,NN base: <sha> round: <n>`.
+  Docs still runs once at the end. **action:** start a new planner session (an open session keeps the old step 8).
+- `kit/roles/reviewer.md`: with `batch/tickets/base` it reads only those tickets and reviews `git diff <base>...HEAD`;
+  writes `review-<batch>-<round>.md`. Without them it behaves as before.
+- Measured on a toy repo (Sonnet): batch 1 (clean) PASS, 9 turns, 13 s; batch 2 (planted bug) FAIL with the right
+  finding and one fix ticket, 10 turns, 15 s; each read only its own tickets. $0.29 list for both.
+
 ## 0.6.0 - 2026-10-12
 
 - `kit/run-worker.py`: live progress. The worker runs with `--output-format stream-json --verbose`; the launcher prints
