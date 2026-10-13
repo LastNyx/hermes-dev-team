@@ -102,6 +102,13 @@ def tool_line(name, inp):
     return f"{name} {arg[:120]}"
 
 
+def short(n):
+    """Token count for the RESULT line: 950, 12k, 1.4M; '?' when the result had no usage."""
+    if n is None:
+        return "?"
+    return f"{n / 1e6:.1f}M" if n >= 1e6 else f"{round(n / 1e3)}k" if n >= 1e3 else str(n)
+
+
 def stream_worker(cmd, progress_path):
     """Run claude with stream-json, print + log one line per tool call and per denial; return the final result event.
 
@@ -233,12 +240,16 @@ def main():
     if guards: verdict = f"FAIL guard:{','.join(guards)} | {verdict}"
 
     u = d.get("usage") or {}
+    # in = uncached input only; cw/cr = cache write/read. Total prompt size is in+cw+cr (cr is usually the bulk).
+    tin, tcw, tcr, tout = (u.get(k) for k in ("input_tokens", "cache_creation_input_tokens",
+                                               "cache_read_input_tokens", "output_tokens"))
     line = (f"{stamp}\t{a.role}\t{model}\t{verdict}\tturns={d.get('num_turns')}\t{secs}s\t"
-            f"out={u.get('output_tokens')}\tlist$={d.get('total_cost_usd')}\tdenials={len(denials)}\t{out_path.as_posix()}\t"
-            f"feature={feature}\ttest={test_cmd or '-'}")
+            f"out={tout}\tlist$={d.get('total_cost_usd')}\tdenials={len(denials)}\t{out_path.as_posix()}\t"
+            f"feature={feature}\ttest={test_cmd or '-'}\tin={tin}\tcw={tcw}\tcr={tcr}")
     with open(".scratch/runs.log", "a", encoding="utf-8") as f:
         f.write(line + "\n")
     print(f"RESULT {a.role} {verdict} | turns={d.get('num_turns')} {secs}s denials={len(denials)} "
+          f"tok=in {short(tin)} / cache {short((tcw or 0) + (tcr or 0))} / out {short(tout)} "
           f"test={test_cmd or '-'} | {out_path.as_posix()}")
     for x in denials[:5]:
         i = x.get("tool_input") or {}

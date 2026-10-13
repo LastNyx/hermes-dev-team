@@ -69,6 +69,9 @@ exists; never create the second one.
 Every run appends one line to `.scratch/runs.log` (role, model, verdict, turns, seconds, tokens, list price, denials,
 feature). At the end of a feature run `python KIT/costs.py --feature <feature> --by-role` and show the user the table;
 read that table, never the raw log. Prices are list price; a subscription seat is billed differently.
+Token columns: `in` is uncached input only, `cache_w`/`cache_r` are prompt-cache writes and reads, so the real prompt
+size is in + cache_w + cache_r (cache_r is usually the bulk) and `hit%` is the share read from cache. Never report
+`in` alone as "input". If the table notes older runs without token columns, run it once with `--backfill`.
 
 ## Changing skills
 

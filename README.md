@@ -43,7 +43,9 @@ files or `.team.json` (they decide what the test command runs); the planner make
 The launcher pastes the project's `CLAUDE.md`, with `@` imports inlined, into every worker's prompt.
 The dev worker takes its test command from the ticket; the reviewer uses `test` from `.team.json`.
 
-Every run appends to `.scratch/runs.log`; `python KIT/costs.py --by-role` totals it per feature.
+Every run appends to `.scratch/runs.log`; `python KIT/costs.py --by-role` totals it per feature: runs, turns,
+minutes, input / cache write / cache read / output tokens, cache hit %, list price, denials (`--backfill` adds the
+token columns to runs logged before 0.8.0).
 Commits never get a Co-Authored-By trailer.
 
 ## When a skill grows

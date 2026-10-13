@@ -5,6 +5,16 @@ mark an entry **action** when another machine must do something (re-run `link-sk
 
 Format: version, date, then one line per change, naming the file.
 
+## 0.8.0 - 2026-10-13
+
+- `kit/run-worker.py`: logs `in=` (uncached input), `cw=` (cache write) and `cr=` (cache read) next to `out=` in
+  `runs.log`; the RESULT line gains `tok=in <n> / cache <n> / out <n>`.
+- `kit/costs.py`: columns in, cache_w, cache_r, out, hit% (cache read / total input). `--backfill` adds the token
+  fields to older log lines from the result JSON in `.scratch/runs/` (keeps `runs.log.bak`; safe to run twice).
+  **action (optional):** run `python KIT/costs.py --backfill` once in each project with older runs.
+- `skills/orchestrate` Cost log: how to read the token columns; never report `in` alone as input.
+- `docs/design.md` decision 14: why four token fields (measured: input_tokens 24 vs cache read 366.8k).
+
 ## 0.7.1 - 2026-10-13
 
 - `skills/orchestrate` Pitfalls: browser-based projects run headless Playwright as the `.team.json` test command,
