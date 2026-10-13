@@ -7,9 +7,9 @@ Prices are list price from Claude Code's JSON; a subscription seat is billed dif
 Token columns: in = uncached input, cache_w = input written to the prompt cache, cache_r = input read from it,
 out = output. Total prompt size is in + cache_w + cache_r; hit% = cache_r / that total.
 --backfill fills in/cw/cr on log lines written before 0.8.0, from the result JSON kept in .scratch/runs/
-(it rewrites runs.log in place, keeping a copy as runs.log.bak).
+(it rewrites runs.log in place, keeping a copy in .scratch/runs/, which is ignored, so the tree stays clean).
 """
-import argparse, collections, json, pathlib, shutil, sys
+import argparse, collections, datetime, json, pathlib, shutil, sys
 
 TOKEN_KEYS = {"in": "input_tokens", "cw": "cache_creation_input_tokens", "cr": "cache_read_input_tokens",
               "out": "output_tokens"}
@@ -56,9 +56,13 @@ def backfill(p):
         out.append(line + "".join(f"\t{k}={usage.get(TOKEN_KEYS[k])}" for k in ("in", "cw", "cr")))
         done += 1
     if done:
-        shutil.copyfile(p, p.with_name(p.name + ".bak"))
+        # measured: a runs.log.bak next to runs.log showed up as untracked and the dev worker FAILed "dirty tree"
+        bak = p.parent / "runs" / f"runs.log.{datetime.datetime.now():%Y%m%d-%H%M%S}.bak"
+        bak.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(p, bak)
         p.write_text("\n".join(out) + "\n", encoding="utf-8")
-    print(f"backfill: {done} line(s) filled, {missing} without a readable result JSON (left as is)")
+    print(f"backfill: {done} line(s) filled, {missing} without a readable result JSON (left as is)"
+          + (f"; backup {bak.as_posix()}" if done else ""))
 
 
 def k(n):

@@ -5,6 +5,17 @@ mark an entry **action** when another machine must do something (re-run `link-sk
 
 Format: version, date, then one line per change, naming the file.
 
+## 0.8.1 - 2026-10-13
+
+- `kit/costs.py --backfill`: the backup goes to `.scratch/runs/runs.log.<stamp>.bak` (ignored) instead of
+  `.scratch/runs.log.bak`, which showed up untracked and made the dev worker FAIL `dirty tree`.
+  **action (optional):** delete any old `.scratch/runs.log.bak`.
+- `kit/run-worker.py`: docs worker default turns 15 -> 25 (a three-file docs job hit the cap before committing).
+- `kit/roles/reviewer.md`: fix tickets always name a `Seam`; refactor-only findings name the touched function and
+  say "existing tests are the check" (a `Seam: None` ticket made the dev FAIL with no code written).
+- `skills/orchestrate` steps 8-9: check a fix ticket's Seam before dispatch; split big docs jobs or hand the docs
+  worker a planner-verified facts file.
+
 ## 0.8.0 - 2026-10-13
 
 - `kit/run-worker.py`: logs `in=` (uncached input), `cw=` (cache write) and `cr=` (cache read) next to `out=` in

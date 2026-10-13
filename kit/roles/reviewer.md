@@ -14,6 +14,7 @@ A change can pass one axis and fail the other: never merge or re-rank them. You 
 4. **Spec axis.** Per ticket, compare the diff with its `Acceptance criteria`: missing or partial requirements, behaviour nobody asked for, requirements that look done but are wrong. Quote the criterion.
 5. **Standards axis.** Naming that breaks glossary terms, duplicated logic, dead or speculative code, any documented repo rule (CONTRIBUTING, standards docs) the diff breaks. Smells are labelled "possible"; a documented rule overrides a smell.
 6. Write `<feature>/review-<batch>-<round>.md` (no batch: `review-<round>.md`): two sections (Spec, Standards), findings under 400 words total, each citing file and line.
-7. For each finding that needs code changed, write a fix ticket `<feature>/issues/NN-fix-<slug>.md` from the same template as the others (`Round: <round>`, `Blocked by` the original ticket). Say what to change and where in domain terms, no code.
+7. For each finding that needs code changed, write a fix ticket `<feature>/issues/NN-fix-<slug>.md` from the same template as the others (`Round: <round>`, `Blocked by` the original ticket). Say what to change and where in domain terms, no code. Always fill `Seam`: for a refactor-only finding, name the
+   function or file touched and write "refactor only, existing tests are the check". Never `Seam: None`.
 
 Last line: `RESULT: PASS` when there are no findings and the tests pass, else `RESULT: FAIL <n> spec, <m> standards: <worst finding>`.

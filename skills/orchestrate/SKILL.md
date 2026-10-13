@@ -60,7 +60,9 @@ exists; never create the second one.
    batch's tickets `done`, record the current HEAD as the next batch's base, and go back to step 3 for the next batch.
    FAIL: it wrote `review-<b>-<n>.md` and fix tickets (`NN-fix-*.md`, Status `todo`); dispatch those as in step 4, add
    them to the batch's `tickets:`, then review with round n+1 and the same base. Round 3 is never dispatched: ask the user.
+   Before dispatching a fix ticket, check its `Seam`: a dev with `Seam: None` FAILs in seconds without writing code. For a refactor-only fix, name the function or file touched and add "refactor only, existing tests are the check".
 9. **Docs** (full lane, all `done`): `python KIT/run-worker.py docs "feature: .scratch/<feature>"`. Read `drift.md` and tell the user the items.
+   The docs worker has 25 turns; a job that edits more than three files still hits the cap after editing but before committing. Split it, or hand it a facts file (`.scratch/<feature>/docs-facts.md`) with only planner-verified facts, since it has no device or web.
 10. **Merge.** Tell the user the branch is ready. The user runs `git merge --no-ff`. Never merge, delete a branch, or push.
 11. **Lessons.** Show the user each line of `.scratch/dev-notes.md`. With their say-so, add the approved project facts to `docs/dev-notes.md` on main (60 lines or fewer), commit as `docs: dev notes`, and clear the scratch file. A lesson that helps every project goes into the team repo's `kit/roles/*.md` only after the user has read it.
 

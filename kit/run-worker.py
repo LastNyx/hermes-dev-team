@@ -22,7 +22,7 @@ Measured facts this relies on (Claude Code 2.1.296):
 import argparse, datetime, fnmatch, json, pathlib, re, shutil, subprocess, sys, time
 
 KIT = pathlib.Path(__file__).resolve().parent
-DEFAULTS = {"dev": ("sonnet", 40), "reviewer": ("sonnet", 25), "docs": ("haiku", 15)}
+DEFAULTS = {"dev": ("sonnet", 40), "reviewer": ("sonnet", 25), "docs": ("haiku", 25)}
 TOOLS = "Read,Edit,Write,Glob,Grep,Bash"
 # Files that decide what the allowed test command runs. If a worker could edit them, the test command would run
 # anything (e.g. a rewritten "test" script). Denied in roles/dev.json AND checked after every run (guard).
