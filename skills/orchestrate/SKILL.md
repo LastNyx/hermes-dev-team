@@ -87,6 +87,7 @@ can still be updated from upstream.
 - `git commit -m x --amend` matches the allowed commit prefix. The launcher's history guard reports it as `FAIL guard:history-rewritten`; restore the old tip from `git reflog`.
 - Commits never carry a Co-Authored-By trailer: the launcher forces `includeCoAuthoredBy: false` and empty `attribution`.
 - A repo's own `.claude/settings.json` is ignored (`--setting-sources ""`), so a project cannot widen a worker's permissions.
+- **Browser-based projects only:** workers have no browser tools, but a headless Playwright run works as the test command. Set `.team.json` `test` to it (e.g. `npx playwright test`), let the Playwright config's `webServer` start the app (the worker may run only that one command, so it cannot start a server itself), and add `playwright.config.*` and the server script to `protected` (not in the launcher's list). Put the page or flow in each ticket's `Seam` so the dev writes a browser test. Tests check only what they assert: visual or UX checks stay with you (planner) in your own browser, with findings written to the review file or a fix ticket, not only chat. Skip all of this for projects without a browser UI.
 
 ## Verification
 

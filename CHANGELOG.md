@@ -5,6 +5,13 @@ mark an entry **action** when another machine must do something (re-run `link-sk
 
 Format: version, date, then one line per change, naming the file.
 
+## 0.7.1 - 2026-10-13
+
+- `skills/orchestrate` Pitfalls: browser-based projects run headless Playwright as the `.team.json` test command,
+  with `webServer` starting the app and `playwright.config.*` + the server script in `protected`; visual/UX checks
+  stay with the planner. Projects without a browser UI are unaffected.
+- `docs/design.md` decision 18: the measurement behind it (dev PASS 35 s, reviewer PASS 15 s, 0 denials, toy repo).
+
 ## 0.7.0 - 2026-10-12
 
 - `skills/orchestrate` steps 2, 7, 8: review per **batch** instead of once per feature. Step 2 proposes batches (one
