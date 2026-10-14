@@ -17,6 +17,7 @@ actions; see [docs/design.md](docs/design.md). It has not yet been used on a rea
 - Planning uses [Matt Pocock's skills](https://github.com/mattpocock/skills) as-is, installed from the Hermes skill hub
   (not vendored, so they keep updating): grill-with-docs, grilling, domain-modeling, to-tickets.
 - [LEARN.md](LEARN.md): a prompt to paste into Hermes on another machine so it installs and learns this repo.
+- [EXISTING-PROJECTS.md](EXISTING-PROJECTS.md): turning on resume + machine switching for a project that used the kit before 0.11.0, per machine.
 - [CHANGELOG.md](CHANGELOG.md): every skill, role, or launcher change; marks what to re-copy after `git pull`.
 - [docs/design.md](docs/design.md): decisions, measurements, and what was rejected.
 - [docs/benchmarks.md](docs/benchmarks.md): every measured run (time, calls, tokens, cost) per backend and model.
@@ -114,6 +115,8 @@ python KIT/scratch.py switch                        # you say "switching": push 
 python KIT/scratch.py init --clone <private-url>    # first time on the other machine
 python KIT/scratch.py stop                          # force-stop the running worker
 ```
+
+A project that used the kit before 0.11.0: follow [EXISTING-PROJECTS.md](EXISTING-PROJECTS.md) on each machine.
 
 - `resume` sorts each `in-progress` ticket: a dev commit for it exists -> verify; no commit and a clean tree ->
   redispatch; a dirty tree -> ask you. It never resets, stashes, merges or rebases; if both machines committed, it

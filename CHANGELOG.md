@@ -5,6 +5,14 @@ mark an entry **action** when another machine must do something (re-run `link-sk
 
 Format: version, date, then one line per change, naming the file.
 
+## 0.11.1 - 2026-10-14
+
+- `EXISTING-PROJECTS.md` (new): per-machine guide to turn on resume + switching for a project that used the kit
+  before 0.11.0 (which machine goes first, private remote, `init --remote` vs `init --clone`, an old `.scratch/` on
+  the second machine, troubleshooting). Linked from README and LEARN.md step 7.
+- `tests/existing_project.py` (new, no model): runs the guide's steps as written, plus the wrong way; 12/12.
+- **action:** for each existing project, follow EXISTING-PROJECTS.md on each machine.
+
 ## 0.11.0 - 2026-10-14
 
 - `kit/scratch.py` (new): `init` (scratch folder becomes its own git repo, `runs/` ignored, product repo excludes it;

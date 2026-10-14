@@ -10,6 +10,7 @@ with local bare repos as remotes, so nothing touches a real project or GitHub, a
 |---|---|---|---|---|
 | `python tests/resume_e2e.py` | `scratch.py` (init, commit, decide, resume, stop, switch) and the worker lock, single repo, two clones as two machines plus a third for a clean fast-forward | 2 real `claude -p` dev runs (Sonnet, about $0.20 list) | about 1.5 min | 33 |
 | `python tests/resume_workspace.py` | the same for a multi-repo workspace (two repos, scratch in the workspace) | none | seconds | 6 |
+| `python tests/existing_project.py` | every step of [EXISTING-PROJECTS.md](../EXISTING-PROJECTS.md): a pre-0.11.0 `.scratch/` turned into a repo, an old copy on a second machine moved aside, and the wrong way (plain `init` on a second machine -> `DIVERGED`, nothing merged) | none | seconds | 12 |
 
 Both print one `PASS`/`FAIL` line per check and end with `<n>/<total> checks passed`; exit 0 only when all pass.
 `resume_e2e.py` needs `claude` logged in (it does not use the Hermes backend).
@@ -44,6 +45,7 @@ or the role JSON files. Add a row to "Results" below with the date, OS and numbe
 |---|---|---|---|---|
 | 2026-10-14 | Windows 11, Claude Code 2.1.296, git 2.53 | `resume_e2e.py` | 33/33 | dev PASS 28 s; the stopped worker left `M test_calc.py` (real half-done edit) |
 | 2026-10-14 | same | `resume_workspace.py` | 6/6 | |
+| 2026-10-14 | same | `existing_project.py` | 12/12 | old runs.log without `ticket=` reads as `no run logged` |
 | 2026-10-14 | same | `resume_e2e.py` (first version, before it was moved into the repo) | 33/33 | dev PASS 26 s; the stopped worker left only `?? __pycache__/`, which alone made switch STOP and resume ASK |
 
 Not yet run on Linux or macOS. The POSIX paths differ: `pid_alive` uses `os.kill(pid, 0)` and `stop` kills the
