@@ -5,6 +5,20 @@ mark an entry **action** when another machine must do something (re-run `link-sk
 
 Format: version, date, then one line per change, naming the file.
 
+## 0.9.1 - 2026-10-14
+
+- `kit/run-worker.py`: absolute permission rules for a workspace scratch folder and glossary are now correct on
+  Windows. Claude Code normalises `C:\Users\a` to `/c/Users/a` before matching, so the rule is `//c/Users/a/**`;
+  0.9.0 wrote `/C:/Users/a/**`, which per Claude Code's permission docs does not match. Linux/macOS unchanged.
+  **action** (Windows): not yet measured there; run one dev worker in a workspace and check it reads its ticket.
+- `kit/tickets.py --add-header`: checks every ticket before touching any; a ticket without the worker header or
+  Matt's `**Blocked by:**` + `**Status:**` lines prints `STOP`, exits 1 and changes nothing (to-tickets format changed
+  upstream, do not guess). The inserted header is followed by one blank line, not three.
+- `skills/orchestrate` 0.4.1: step 2 is one procedure (`tickets.py --add-header`, STOP means tell the user); the old
+  hand-replace instructions that contradicted it are gone.
+- Measured on Linux (toy two-repo workspace, Haiku dev): ticket `Repo: api` refused from `ui`; from `api` PASS in
+  22 s, wrote and committed in its repo, read/wrote the workspace scratch, and its write to `../ui/HACK.md` was denied.
+
 ## 0.9.0 - 2026-10-14
 
 - `kit/teamcfg.py` (new): one place that finds the config. A repo's `.team.json` as before, or a WORKSPACE

@@ -112,12 +112,27 @@ def rel(p):
         return pathlib.Path(p).as_posix()
 
 
+def perm_path(p):
+    """An absolute path in Claude Code permission-rule form: `//` + the POSIX path.
+
+    Claude Code normalises Windows paths to POSIX before matching (`C:\\Users\\a` -> `/c/Users/a`), so the rule for a
+    Windows folder is `//c/Users/a/**`; on Linux and macOS it is `//home/a/**`.
+    """
+    s = p.as_posix() if isinstance(p, pathlib.PurePath) else str(p)
+    if re.match(r"^[A-Za-z]:[\\/]", s):                  # Windows drive path (backslashes if not a WindowsPath)
+        s = s.replace("\\", "/")
+    m = re.match(r"^([A-Za-z]):/(.*)$", s)
+    if m:
+        s = f"/{m.group(1).lower()}/{m.group(2)}"
+    return "/" + s
+
+
 def scratch_rule(rule, scratch, repo):
     """Copy a role's `Tool(./.scratch/...)` rule onto a scratch folder outside the repo (`//` = absolute path)."""
     m = re.fullmatch(r"(\w+)\(\./\.scratch(/.*)?\)", rule)
     if not m or scratch == repo / ".scratch":
         return None
-    return f"{m.group(1)}(/{scratch.as_posix()}{m.group(2) or ''})"
+    return f"{m.group(1)}({perm_path(scratch)}{m.group(2) or ''})"
 
 
 def tool_line(name, inp):
@@ -236,8 +251,8 @@ def main():
         for key in ("allow", "deny"):
             perms[key] += [r for r in (scratch_rule(x, scratch, repo) for x in perms[key]) if r]
         if a.role == "dev":
-            perms["allow"] += [f"Read(/{scratch.as_posix()}/**)", f"Edit(/{scratch.as_posix()}/**)"]
-            perms["deny"].append(f"Edit(/{scratch.as_posix()}/runs/**)")
+            perms["allow"] += [f"Read({perm_path(scratch)}/**)", f"Edit({perm_path(scratch)}/**)"]
+            perms["deny"].append(f"Edit({perm_path(scratch)}/runs/**)")
         for key in ("ticket", "feature"):                    # absolute, so the allow rule matches what the worker opens
             pp = prompt_path(prompt, key)
             if pp:
@@ -247,8 +262,8 @@ def main():
     glossary = cfg.get("glossary")
     if glossary and a.role != "dev":
         gp = (tc["base"] / glossary).expanduser().resolve()
-        settings["permissions"]["allow"].append(f"Read(/{gp.as_posix()})")
-        settings["permissions"]["deny"].append(f"Edit(/{gp.as_posix()})")
+        settings["permissions"]["allow"].append(f"Read({perm_path(gp)})")
+        settings["permissions"]["deny"].append(f"Edit({perm_path(gp)})")
         prompt += f"\nThe glossary is {gp.as_posix()} (read it there; never edit it)."
     if test_cmd:
         settings["permissions"]["allow"].append(f"Bash({test_cmd})")

@@ -11,6 +11,8 @@ Usage (cwd = a repo or the workspace):
 Tickets are <feature>/issues/NN-slug.md. --add-header also moves flat <feature>/NN-*.md files into issues/.
 It inserts the header from skills/orchestrate/templates/ticket-header.md.template after the title, keeps the body,
 and carries over Matt Pocock's `**Blocked by:**` line; other fields stay `<...>` placeholders for the planner.
+A ticket with neither the worker header nor Matt's `**Blocked by:**` + `**Status:**` lines stops --add-header
+(exit 1, nothing changed): the to-tickets format has changed and this script needs updating, so it does not guess.
 Exit 0 = every ticket is dispatchable, 1 = something to fix.
 """
 import argparse, pathlib, re, sys
@@ -53,32 +55,48 @@ def find_feature(arg):
     return p.resolve() if p.is_dir() else teamcfg.load()["scratch"] / arg
 
 
+def matt_format_ok(text):
+    """True when a ticket has Matt Pocock's `**Blocked by:**` and `**Status:**` lines (the format --add-header knows)."""
+    return all(re.search(rf"^\*\*{k}:\*\*", text, re.M) for k in ("Blocked by", "Status"))
+
+
 def add_header(feature, apply):
+    """Move flat NN-*.md into issues/ and insert the worker header. Checks every ticket first: nothing is moved or
+    written when one has an unknown format. Returns 1 on STOP, else 0."""
     issues = feature / "issues"
     flat = sorted(p for p in feature.glob("*.md") if re.match(r"\d+", p.name))
+    current = sorted(issues.glob("*.md")) if issues.is_dir() else []
+    todo, unknown = [], []
+    for src in current + flat:
+        text = src.read_text(encoding="utf-8")
+        if field(text, "Status") is not None and field(text, "Seam") is not None:
+            continue                                       # already has the worker header
+        (todo if matt_format_ok(text) else unknown).append((issues / src.name, text))
+    if unknown:
+        # Do not guess: a ticket without Matt's two lines means to-tickets changed upstream (or a hand-written ticket).
+        for t, _ in unknown:
+            print(f"  STOP {t.name}: no `**Blocked by:**` and `**Status:**` lines (to-tickets format changed upstream?)")
+        print("nothing changed; update tickets.py and orchestrate step 2 for the new format, or add those two lines")
+        return 1
     for p in flat:
         print(f"  {'move' if apply else 'would move'} {p.name} -> issues/{p.name}")
         if apply:
             issues.mkdir(exist_ok=True)
             p.rename(issues / p.name)
-    tickets = sorted(issues.glob("*.md")) if issues.is_dir() else []
-    if not apply:
-        tickets += [issues / p.name for p in flat]
     block = header_fields()
-    for t in sorted(set(tickets)):
-        src = t if t.exists() else feature / t.name
-        text = src.read_text(encoding="utf-8")
-        if field(text, "Status") is not None and field(text, "Seam") is not None:
-            continue
+    for t, text in todo:
         lines = text.splitlines()
         title_at = next((i for i, l in enumerate(lines) if l.startswith("# ")), -1)
         mb = re.search(r"^\*\*Blocked by:\*\*\s*(.+)$", text, re.M)
         header = [re.sub(r"^Blocked by:.*", f"Blocked by: {mb.group(1).strip()}", l) if mb else l for l in block]
         body = [l for l in lines[title_at + 1:] if not re.match(r"^\*\*(Blocked by|Status):\*\*", l)]
+        # the removed lines leave blank runs: keep one blank line, none at the start
+        body = re.sub(r"\n{3,}", "\n\n", "\n".join(body).strip("\n")).splitlines()
         new = lines[:title_at + 1] + [""] + header + [""] + body
         print(f"  {'add' if apply else 'would add'} header to {t.name}")
         if apply:
             t.write_text("\n".join(new).rstrip() + "\n", encoding="utf-8")
+    return 0
 
 
 def main():
@@ -92,7 +110,8 @@ def main():
     if not feature.is_dir():
         print(f"ERROR no feature folder {feature}"); return 2
     if a.add_header:
-        add_header(feature, a.apply)
+        if add_header(feature, a.apply):
+            return 1
         if not a.apply:
             return 0
     tickets = sorted((feature / "issues").glob("*.md"))
