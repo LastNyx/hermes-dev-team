@@ -21,7 +21,8 @@ actions; see [docs/design.md](docs/design.md). It has not yet been used on a rea
 
 ## Requirements
 
-Claude Code 2.1.296 or newer, logged in (`claude auth login`); Python 3; git; Hermes Agent for the planner.
+Claude Code 2.1.296 or newer, logged in (`claude auth login`) or `ANTHROPIC_API_KEY` set; Python 3; git; Hermes
+Agent for the planner. Without Claude, workers fall back to a Hermes worker profile (see Backends below).
 This repo holds no credentials.
 
 ## Install
@@ -53,6 +54,49 @@ Every run appends to `.scratch/runs.log`; `python KIT/costs.py --by-role` totals
 minutes, input / cache write / cache read / output tokens, cache hit %, list price, denials (`--backfill` adds the
 token columns to runs logged before 0.8.0).
 Commits never get a Co-Authored-By trailer.
+
+## Backends
+
+Workers run on Claude Code (`claude -p`) whenever it is logged in or `ANTHROPIC_API_KEY` is set. Otherwise, or when
+`.team.json` says so, they run as a headless Hermes session in a dedicated worker profile, on any model Hermes can
+reach. The dispatch command is the same; the launcher picks.
+
+| | claude (default) | hermes (fallback) |
+|---|---|---|
+| Blocked while running | deny-by-default allow-list | nothing: prompt rules only (`enforce=prompt-only`) |
+| Caught after the run | main moved, branch changed, history rewritten, protected file changed, pushed | the same |
+| Not caught | - | a write outside the repo; a checkout that switches back |
+| Model | `models` (`sonnet`, `haiku`) | `hermes_models` (the provider's full id), else the profile default |
+| Effort | `effort` -> `--effort` | `effort` -> `--reasoning` |
+| Cost in `costs.py` | list price | tokens only (`$` unknown); shown as `<role>@hermes` |
+
+Every key is optional; a project needs only `test`. Full example:
+
+```json
+{
+  "test": "npm test",
+  "backend": "auto",
+  "models": {"dev": "sonnet", "reviewer": "sonnet", "docs": "haiku"},
+  "hermes_models": {"dev": "claude-sonnet-5-5", "docs": "claude-haiku-5-5"},
+  "hermes_provider": "anthropic",
+  "hermes_profile": "hdt-worker",
+  "effort": "medium"
+}
+```
+
+`backend` is `auto`, `claude`, `hermes`, or a per-role map like `{"docs": "hermes"}`. `effort` may also be a map.
+
+One-time Hermes setup per machine (only if you use the hermes backend; the launcher prints these when the profile is
+missing and never edits Hermes config itself):
+
+```
+hermes profile create hdt-worker --no-skills --no-alias
+hermes -p hdt-worker model                    # provider + default model for workers
+hermes -p hdt-worker chat -q "reply OK" -Q    # first run installs dependencies (slow once)
+```
+
+Worker sessions are tagged `--source tool` and stay in that profile, out of your chat list. Each run also makes one
+small title-generation call that `costs.py` does not count.
 
 ## When a skill grows
 

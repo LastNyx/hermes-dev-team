@@ -158,7 +158,7 @@ def short(n):
 
 
 def stream_worker(cmd, progress_path, env=None):
-    """Run claude with stream-json, print + log one line per tool call and per denial; return the final result event.
+    """Run claude or hermes with stream-json, print + log one line per tool call and per denial; return the final result event.
 
     The final `result` event carries the same fields as --output-format json (subtype, result, num_turns, usage,
     total_cost_usd, permission_denials). Progress lines go to stdout (flushed, so a background heartbeat sees them)
@@ -178,6 +178,15 @@ def stream_worker(cmd, progress_path, env=None):
                     continue
                 if ev.get("type") == "result":
                     final = ev
+                    continue
+                # Hermes (`hermes chat --format stream-json`, measured): flat events {"type": "tool_use", "name",
+                # "input"} and {"type": "tool_result", "name", "is_error", "output"}; no allow-list, so no denials.
+                if ev.get("type") == "tool_use" and "name" in ev:
+                    emit(tool_line(ev.get("name"), ev.get("input") or {}))
+                    continue
+                if ev.get("type") == "tool_result" and "name" in ev:
+                    if ev.get("is_error"):
+                        emit(f"exit!=0 {ev.get('name')}: {' '.join(str(ev.get('output') or '').split())[:100]}")
                     continue
                 # measured (2.1.296): a denied call comes back as a tool_result "This command requires approval" with
                 # tool_result_meta[].permission_decision.decision == "reject"; the wording mentions neither "denied"
@@ -202,28 +211,154 @@ def stream_worker(cmd, progress_path, env=None):
                 continue
     err = proc.stderr.read()
     proc.wait()
-    return final or {"subtype": "unparsed", "result": err.strip()[-300:]}
+    if final is not None:
+        final.setdefault("_exit", proc.returncode)
+    return final or {"subtype": "unparsed", "result": err.strip()[-300:], "_exit": proc.returncode}
+
+
+def claude_ready():
+    """True when Claude Code can run a worker: `claude` on PATH and an API key or a logged-in subscription.
+
+    measured: `claude auth status` prints JSON with "loggedIn" and needs no model call.
+    """
+    if not shutil.which("claude"):
+        return False
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        return True
+    try:
+        r = subprocess.run(["claude", "auth", "status"], capture_output=True, text=True, timeout=30)
+        return bool(json.loads(r.stdout or "{}").get("loggedIn"))
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return False
+
+
+def pick_backend(role, cfg, forced):
+    """claude | hermes. `.team.json` "backend" is a string or a per-role map like "models"; default auto."""
+    v = forced or cfg.get("backend") or "auto"
+    if isinstance(v, dict):
+        v = v.get(role) or v.get("default") or "auto"
+    if v == "auto":
+        return "claude" if claude_ready() else "hermes"
+    if v not in ("claude", "hermes"):
+        raise SystemExit(f"RESULT {role} ERROR unknown backend {v!r} (claude, hermes, auto)")
+    return v
+
+
+def hermes_home():
+    if os.environ.get("HERMES_HOME"):
+        return pathlib.Path(os.environ["HERMES_HOME"]).expanduser()
+    la = os.environ.get("LOCALAPPDATA")
+    if la and (pathlib.Path(la) / "hermes").is_dir():
+        return pathlib.Path(la) / "hermes"
+    return pathlib.Path.home() / ".hermes"
+
+
+def hermes_profile_dir(name):
+    return hermes_home() / "profiles" / name
+
+
+HERMES_SETUP = """  one-time setup on this machine (run these yourself; the kit never edits Hermes config):
+    hermes profile create {p} --no-skills --no-alias
+    hermes -p {p} model          # pick the provider + default model for workers (e.g. anthropic, claude-sonnet-5-5)
+    hermes -p {p} chat -q "reply OK" -Q   # first run installs dependencies (slow once)"""
+
+
+def remote_refs():
+    """`git ls-remote` per remote; None for a remote that could not be read (offline, no auth): not checked."""
+    out = {}
+    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+    for r in (git("remote") or "").split():
+        try:
+            p = subprocess.run(["git", "ls-remote", r], capture_output=True, text=True, timeout=30, env=env)
+            out[r] = p.stdout if p.returncode == 0 else None
+        except (OSError, subprocess.TimeoutExpired):
+            out[r] = None
+    return out
+
+
+def snapshot(protected):
+    return {"main": git("rev-parse", "main"), "branch": git("branch", "--show-current"), "head": git("rev-parse", "HEAD"),
+            "protected": sorted(protected_changes(None, protected)), "remotes": remote_refs()}
+
+
+def guards_after(snap, protected):
+    g = []
+    if git("rev-parse", "main") != snap["main"]: g.append("main-moved")
+    if git("branch", "--show-current") != snap["branch"]: g.append("branch-changed")
+    if snap["head"] and git("merge-base", "--is-ancestor", snap["head"], "HEAD") is None:
+        g.append("history-rewritten")                          # amend/reset dropped the old tip
+    touched = [n for n in protected_changes(snap["head"], protected) if n not in snap["protected"]]
+    if touched:
+        g.append("test-config-changed:" + "+".join(touched[:3]))
+    now = remote_refs()                                        # measured: a hermes worker pushed when not told not to
+    pushed = [r for r, before in snap["remotes"].items() if before is not None and now.get(r) not in (None, before)]
+    if pushed:
+        g.append("pushed:" + "+".join(pushed))
+    return g
+
+
+def verdict_of(final_text, subtype, guards):
+    lines = (final_text or "").strip().splitlines()
+    last = lines[-1].strip().strip("`*").strip() if lines else ""
+    if subtype == "error_max_turns": v = "FAIL turn-cap"
+    elif last.startswith("RESULT: PASS") and not guards: v = "PASS" + last[len("RESULT: PASS"):]
+    elif last.startswith("RESULT:"): v = last[len("RESULT:"):].strip()
+    else: v = f"FAIL no RESULT line ({subtype})"
+    return f"FAIL guard:{','.join(guards)} | {v}" if guards else v
+
+
+def report(st, verdict, turns, secs, usage, cost, denials, out_path, backend):
+    """One runs.log line + the RESULT line (always the last line printed). usage = (in, cw, cr, out)."""
+    tin, tcw, tcr, tout = usage
+    enforce = "\tenforce=prompt-only" if backend == "hermes" else ""
+    line = (f"{st['stamp']}\t{st['role']}\t{st['model']}\t{verdict}\tturns={turns}\t{secs}s\t"
+            f"out={tout}\tlist$={cost}\tdenials={len(denials)}\t{rel(out_path)}\t"
+            f"feature={st['feature']}\ttest={st['test_cmd'] or '-'}\tin={tin}\tcw={tcw}\tcr={tcr}\trepo={st['repo_name']}"
+            f"\tbackend={backend}{enforce}")
+    with open(pathlib.Path(st["scratch"]) / "runs.log", "a", encoding="utf-8") as f:
+        f.write(line + "\n")
+    tag = " backend=hermes enforce=prompt-only" if backend == "hermes" else ""
+    print(f"RESULT {st['role']} {verdict} |{tag} turns={turns} {secs}s denials={len(denials)} "
+          f"tok=in {short(tin)} / cache {short((tcw or 0) + (tcr or 0))} / out {short(tout)} "
+          f"test={st['test_cmd'] or '-'} | {rel(out_path)}")
+    for x in denials[:5]:
+        i = x.get("tool_input") or {}
+        print(f"  denied {x.get('tool_name')}: {i.get('command') or i.get('file_path')}")
+    return 0 if verdict.startswith("PASS") else 1
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("role")
-    ap.add_argument("prompt")
+    ap.add_argument("role", nargs="?")
+    ap.add_argument("prompt", nargs="?")
     ap.add_argument("--test-cmd", help="exact command added to the Bash allow-list")
     ap.add_argument("--model")
     ap.add_argument("--max-turns", type=int)
+    ap.add_argument("--effort", choices=["low", "medium", "high", "xhigh", "max"],
+                    help="Claude Code effort; default .team.json effort (string or per-role map), else Claude's default")
+    ap.add_argument("--backend", choices=["claude", "hermes", "auto"], help="default: .team.json backend, else auto")
     a = ap.parse_args()
+    if not a.role or a.prompt is None:
+        ap.error("role and prompt are required")
 
     prompt_file, settings_file = KIT / "roles" / f"{a.role}.md", KIT / "roles" / f"{a.role}.json"
     if not prompt_file.exists() or not settings_file.exists():
         print(f"RESULT {a.role} ERROR unknown role (no {prompt_file.name}/{settings_file.name})"); return 2
-    if not shutil.which("claude"):
-        print(f"RESULT {a.role} ERROR claude CLI not on PATH"); return 2
     if git("rev-parse", "--show-toplevel") is None:
         print(f"RESULT {a.role} ERROR cwd is not a git repo"); return 2
 
     tc = teamcfg.load()
     cfg, scratch, repo = tc["cfg"], tc["scratch"], pathlib.Path.cwd().resolve()
+    backend = pick_backend(a.role, cfg, a.backend)
+    if backend == "claude" and not shutil.which("claude"):
+        print(f"RESULT {a.role} ERROR claude CLI not on PATH"); return 2
+    hprofile = cfg.get("hermes_profile") or "hdt-worker"
+    if backend == "hermes":
+        if not shutil.which("hermes"):
+            print(f"RESULT {a.role} ERROR no Claude login/API key and hermes CLI not on PATH"); return 2
+        if not hermes_profile_dir(hprofile).is_dir():
+            print(HERMES_SETUP.format(p=hprofile))
+            print(f"RESULT {a.role} ERROR no Hermes profile {hprofile} (setup commands above)"); return 2
     ticket = prompt_path(a.prompt, "ticket")
     want_repo = header_line(ticket, "Repo")
     if want_repo and want_repo != repo.name:
@@ -231,6 +366,8 @@ def main():
     model, turns = DEFAULTS.get(a.role, ("sonnet", 25))
     model = a.model or (cfg.get("models") or {}).get(a.role) or model
     turns = a.max_turns or turns
+    effort = cfg.get("effort")
+    effort = a.effort or ((effort or {}).get(a.role) if isinstance(effort, dict) else effort)
     test_cmd = a.test_cmd or (header_line(ticket, "Test command") if a.role == "dev" else None) or \
         (cfg.get("test") if a.role != "docs" else None)
     target = ticket or prompt_path(a.prompt, "feature")
@@ -244,6 +381,11 @@ def main():
     settings["permissions"].setdefault("deny", []).extend(f"Edit(**/{p})" for p in protected)
     prompt = a.prompt
     outside = scratch != repo / ".scratch"
+    if outside or backend == "hermes":                         # hermes: absolute paths, its cwd is not the repo
+        for key in ("ticket", "feature"):
+            pp = prompt_path(prompt, key)
+            if pp:
+                prompt = re.sub(rf"{key}:\s*\S+", lambda _m, k=key, v=pp: f"{k}: {v.as_posix()}", prompt, count=1)
     if outside:
         # measured: Read(//abs/**) + Edit(//abs/**) let a worker read and edit a folder outside its cwd, no --add-dir
         # needed; a sibling folder stayed denied. Dev gets the same reach it has on an in-repo .scratch.
@@ -253,10 +395,6 @@ def main():
         if a.role == "dev":
             perms["allow"] += [f"Read({perm_path(scratch)}/**)", f"Edit({perm_path(scratch)}/**)"]
             perms["deny"].append(f"Edit({perm_path(scratch)}/runs/**)")
-        for key in ("ticket", "feature"):                    # absolute, so the allow rule matches what the worker opens
-            pp = prompt_path(prompt, key)
-            if pp:
-                prompt = re.sub(rf"{key}:\s*\S+", lambda _m, k=key, v=pp: f"{k}: {v.as_posix()}", prompt, count=1)
         prompt += (f"\nThe scratch folder is {scratch.as_posix()}: wherever your instructions say `.scratch/`, use that"
                    " folder (absolute paths).")
     glossary = cfg.get("glossary")
@@ -276,64 +414,85 @@ def main():
     rules, rules_full = project_rules(tc["rules"], tc["rules_max_chars"])
     rules_block = ("\n\n## Project rules (imports inlined; they bind you unless a tool rule below forbids the "
                    "action)\n\n" + rules.strip() + "\n") if rules.strip() else ""
-    agents_path.write_text(json.dumps({a.role: {
-        "description": f"{a.role} worker",
-        "prompt": prompt_file.read_text(encoding="utf-8").rstrip() + rules_block + "\n\n"
-                  + (KIT / "roles" / "_tool-rules.md").read_text(encoding="utf-8")}}), encoding="utf-8")
+    tool_rules = "_tool-rules-hermes.md" if backend == "hermes" else "_tool-rules.md"
+    role_prompt = (prompt_file.read_text(encoding="utf-8").rstrip() + rules_block + "\n\n"
+                   + (KIT / "roles" / tool_rules).read_text(encoding="utf-8"))
 
-    main_before, branch_before = git("rev-parse", "main"), git("branch", "--show-current")
-    head_before = git("rev-parse", "HEAD")
-    protected_before = set(protected_changes(None, protected))   # already dirty before the run: not the worker's
+    branch_before = git("branch", "--show-current")
     if branch_before in ("main", "master"):
         print(f"RESULT {a.role} ERROR refusing to run on {branch_before}; check out the feature branch"); return 2
-    cmd = ["claude", "-p", prompt, "--agents", str(agents_path), "--agent", a.role, "--tools", TOOLS,
-           "--settings", json.dumps(settings), "--setting-sources", "", "--model", model,
-           "--max-turns", str(turns), "--output-format", "stream-json", "--verbose", "--no-session-persistence"]
-    progress_path = runs / f"{stamp}-{a.role}.progress.log"
+    snap = snapshot(protected)
+    st = {"role": a.role, "model": model, "test_cmd": test_cmd, "feature": feature, "repo_name": repo.name,
+          "repo": repo.as_posix(), "scratch": scratch.as_posix(), "stamp": stamp, "protected": protected,
+          "snapshot": snap, "out_path": out_path.as_posix()}
     cut = f" rules={round(rules_full / 1000)}k>cap" if rules_full > tc["rules_max_chars"] else ""
-    print(f"START {a.role} {model} max-turns={turns}{cut} | progress: {rel(progress_path)}", flush=True)
+
     env = dict(os.environ)
     if tc["path"]:
         env["PATH"] = os.pathsep.join(tc["path"] + [env.get("PATH", "")])
+    progress_path = runs / f"{stamp}-{a.role}.progress.log"
+
+    if backend == "hermes":
+        return run_hermes(st, role_prompt, prompt, runs, cut, cfg, hprofile, effort, turns, env, progress_path,
+                          snap, protected, out_path)
+
+    agents_path.write_text(json.dumps({a.role: {"description": f"{a.role} worker", "prompt": role_prompt}}),
+                           encoding="utf-8")
+    cmd = ["claude", "-p", prompt, "--agents", str(agents_path), "--agent", a.role, "--tools", TOOLS,
+           "--settings", json.dumps(settings), "--setting-sources", "", "--model", model,
+           "--max-turns", str(turns), "--output-format", "stream-json", "--verbose", "--no-session-persistence"]
+    if effort:
+        cmd += ["--effort", effort]
+    print(f"START {a.role} claude:{model}{'/' + effort if effort else ''} max-turns={turns}{cut} | "
+          f"progress: {rel(progress_path)}", flush=True)
     t0 = time.time()
     d = stream_worker(cmd, progress_path, env)
     secs = round(time.time() - t0)
     out_path.write_text(json.dumps(d), encoding="utf-8")
-
-    lines = (d.get("result") or "").strip().splitlines()
-    last = lines[-1].strip() if lines else ""
-    denials = d.get("permission_denials") or []
-    guards = []
-    if git("rev-parse", "main") != main_before: guards.append("main-moved")
-    if git("branch", "--show-current") != branch_before: guards.append("branch-changed")
-    if head_before and git("merge-base", "--is-ancestor", head_before, "HEAD") is None:
-        guards.append("history-rewritten")                     # amend/reset dropped the old tip
-    touched = [n for n in protected_changes(head_before, protected) if n not in protected_before]
-    if touched:
-        guards.append("test-config-changed:" + "+".join(touched[:3]))
-
-    if d.get("subtype") == "error_max_turns": verdict = "FAIL turn-cap"
-    elif last.startswith("RESULT: PASS") and not guards: verdict = "PASS" + last[len("RESULT: PASS"):]
-    elif last.startswith("RESULT:"): verdict = last[len("RESULT:"):].strip()
-    else: verdict = f"FAIL no RESULT line ({d.get('subtype')})"
-    if guards: verdict = f"FAIL guard:{','.join(guards)} | {verdict}"
-
+    verdict = verdict_of(d.get("result"), d.get("subtype"), guards_after(snap, protected))
     u = d.get("usage") or {}
     # in = uncached input only; cw/cr = cache write/read. Total prompt size is in+cw+cr (cr is usually the bulk).
-    tin, tcw, tcr, tout = (u.get(k) for k in ("input_tokens", "cache_creation_input_tokens",
-                                               "cache_read_input_tokens", "output_tokens"))
-    line = (f"{stamp}\t{a.role}\t{model}\t{verdict}\tturns={d.get('num_turns')}\t{secs}s\t"
-            f"out={tout}\tlist$={d.get('total_cost_usd')}\tdenials={len(denials)}\t{rel(out_path)}\t"
-            f"feature={feature}\ttest={test_cmd or '-'}\tin={tin}\tcw={tcw}\tcr={tcr}\trepo={repo.name}")
-    with open(scratch / "runs.log", "a", encoding="utf-8") as f:
-        f.write(line + "\n")
-    print(f"RESULT {a.role} {verdict} | turns={d.get('num_turns')} {secs}s denials={len(denials)} "
-          f"tok=in {short(tin)} / cache {short((tcw or 0) + (tcr or 0))} / out {short(tout)} "
-          f"test={test_cmd or '-'} | {rel(out_path)}")
-    for x in denials[:5]:
-        i = x.get("tool_input") or {}
-        print(f"  denied {x.get('tool_name')}: {i.get('command') or i.get('file_path')}")
-    return 0 if verdict.startswith("PASS") else 1
+    usage = tuple(u.get(k) for k in ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens",
+                                     "output_tokens"))
+    return report(st, verdict, d.get("num_turns"), secs, usage, d.get("total_cost_usd"),
+                  d.get("permission_denials") or [], out_path, "claude")
+
+
+def run_hermes(st, role_prompt, prompt, runs, cut, cfg, profile, effort, turns, env, progress_path, snap,
+               protected, out_path):
+    """Fallback backend: one headless `hermes -p <profile> chat` run, judged exactly like a claude run.
+
+    measured (Sonnet 5.5, anthropic provider, toy ticket): 28 s, 8 API calls, sessions stay in the worker profile.
+    No allow-list: with the forbidden list in the prompt it refused all 4 forbidden chores; without it, it did all 4.
+    """
+    hmodel = (cfg.get("hermes_models") or {}).get(st["role"])
+    pf = runs / f"{st['stamp']}-{st['role']}.prompt.md"
+    pf.write_text(role_prompt + f"\n\n## Your task\n\nRepo root: {st['repo']} (run every command from there; you are "
+                  f"on branch `{snap['branch']}`).\n\n{prompt}\n", encoding="utf-8")
+    cmd = ["hermes", "-p", profile, "chat", "--query-file", str(pf), "-Q", "--in", st["repo"],
+           "-t", "file,terminal", "--max-turns", str(turns), "--ignore-rules", "--source", "tool",
+           "--format", "stream-json"]
+    if hmodel:
+        cmd += ["-m", hmodel]
+    if cfg.get("hermes_provider"):
+        cmd += ["--provider", cfg["hermes_provider"]]
+    if effort:
+        cmd += ["--reasoning", effort]
+    env.pop("TERMINAL_CWD", None)                # measured: it overrides --in and starts the worker in the home folder
+    print(f"START {st['role']} hermes:{hmodel or profile + '-default'}{'/' + effort if effort else ''} "
+          f"max-turns={turns}{cut} enforce=prompt-only | progress: {rel(progress_path)}", flush=True)
+    t0 = time.time()
+    d = stream_worker(cmd, progress_path, env)
+    secs = round(time.time() - t0)
+    out_path.write_text(json.dumps(d), encoding="utf-8")
+    st["model"] = hmodel or f"{profile}-default"
+    subtype = "success" if d.get("_exit") == 0 else f"exit={d.get('_exit')}"
+    verdict = verdict_of(d.get("text") if "text" in d else d.get("result"), subtype, guards_after(snap, protected))
+    if verdict.startswith("PASS") and d.get("_exit") != 0:     # measured: turn cap = exit 1, model writes its own line
+        verdict = f"FAIL hermes exit={d.get('_exit')} | {verdict}"
+    t = d.get("tokens") or {}
+    usage = (t.get("input"), t.get("cache_write"), t.get("cache_read"), t.get("output"))
+    return report(st, verdict, "-", secs, usage, None, [], out_path, "hermes")
 
 
 if __name__ == "__main__":

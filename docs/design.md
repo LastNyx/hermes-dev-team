@@ -37,6 +37,9 @@ repo with Claude Code 2.1.296.
 | 18 | Browser-based projects: browser checks run as the test command (headless Playwright), not as a worker tool | Workers load no MCP servers (`--setting-sources ""`) and run only one test command, so the Playwright config's `webServer` must start the app. Measured: dev wrote a browser test, saw it red then green, PASS in 35 s; reviewer ran it and PASSed in 15 s; 0 denials, no launcher change. Assertions only: visual/UX checks stay with the planner. `playwright.config.*` and the server script must be added to `.team.json` `protected` (the dev's deny on them was configured but not exercised). |
 | 19 | Multi-repo workspace: one workspace `.team.json` with a `repos` map, scratch outside the repos, `Repo:` per ticket | Some teams keep agent files out of shared repos. The worker gets the scratch folder by absolute-path rules (`Read(//abs/**)`, `Edit(//abs/**)`), measured to work without `--add-dir` while the sibling repo stayed denied. One worker, one repo, one branch per run is unchanged; batches stay inside one repo so a review diff has one base. |
 | 20 | Worker rules are capped (`rules_max_chars`, default 40000) and may come from a short `rules` file | A 150k-char CLAUDE.md was pasted into every run. Cut text ends with a pointer to the full file; measured: the worker Grepped it for a line past the cut. |
+| 22 | Workers are backend-agnostic: claude by default, a headless Hermes worker profile as the fallback (`backend` auto/claude/hermes, per role) | Not every machine has Claude. Measured on Sonnet 5.5 (anthropic provider): 28 s vs 27 s for `claude -p` on the same ticket, about a quarter of the cached prompt tokens, sessions kept out of the user's chat list. The first Hermes spike (92 s) was slow because of the claude-subscription plugin, not Hermes. |
+| 23 | Hermes workers are labelled `enforce=prompt-only` and judged by the same after-run guards | `-t file,terminal` blocks nothing inside the shell and headless approvals were off. With the forbidden list in the prompt the worker refused all 4 forbidden chores; without it, it checked out main and back, wrote outside the repo, edited package.json and pushed. |
+| 24 | New guard for both backends: `git ls-remote` per remote before and after, `FAIL guard:pushed:<remote>` on any change | A push was the one forbidden action no earlier guard caught. Measured: a push during a Claude run turned a worker PASS into `FAIL guard:pushed:origin`. An unreadable remote (offline, no auth) is skipped, not failed. |
 | 21 | `Test command` must be cheap and safe; anything needing a server, DB, or the user's say-so is a planner-run `Verify:` | A worker cannot ask, and a project rule may forbid DB operations without the user's yes in that turn. |
 
 ## Measured (end to end, toy repo)
@@ -54,6 +57,8 @@ repo with Claude Code 2.1.296.
 - Protected-file matching is by file name. A test runner configured somewhere else (e.g. a custom script path) needs that file in `.team.json` `protected`.
 
 - The test command executes code the dev wrote, so a dev can run anything through it. Review before merge is the defence.
+- Hermes backend: no allow-list. A write outside the repo, or a branch switch that switches back, is not caught;
+  only the prompt rules stop them. Review before merge is the defence, as for the test command.
 - Amend is detected after the fact, not prevented; recovery is `git reflog`.
 - Prices in the log are list price; a subscription seat is billed differently.
 
@@ -62,5 +67,8 @@ repo with Claude Code 2.1.296.
 - **Four Hermes profiles with per-profile plugin installs:** no enforcement in headless runs, about 5x slower, and setup
   that touched each profile's environment.
 - **Hermes Kanban dispatcher:** spawns only Hermes profiles, so it cannot run enforced `claude -p` workers.
+- **Hermes `delegate_task` subagents as the fallback worker:** one global `delegation.model` for every role, a
+  three-step prepare/delegate/finish flow for the planner, and child sessions in the user's own profile. Replaced by
+  a headless run in a worker profile with `-m` per role.
 - **String-matching PreToolUse hooks:** bypassed in the first test.
 - **Installer scripts:** a clone plus three copied skill folders is enough.

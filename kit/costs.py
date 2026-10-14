@@ -97,7 +97,8 @@ def main():
         rows = [r for r in rows if r["feature"] == a.feature]
     groups = collections.OrderedDict()
     for r in rows:
-        key = (r["feature"], r["role"]) if a.by_role else (r["feature"],)
+        role = r["role"] + ("@hermes" if r.get("backend") == "hermes" else "")   # hermes runs never mix with claude
+        key = (r["feature"], role) if a.by_role else (r["feature"],)
         groups.setdefault(key, []).append(r)
     print(f"{'feature':<16}{'role':<10}{'runs':>5}{'pass':>5}{'fail':>5}{'turns':>7}{'mins':>7}"
           f"{'in':>8}{'cache_w':>9}{'cache_r':>9}{'out':>8}{'hit%':>6}{'list$':>8}{'denied':>7}")
@@ -112,6 +113,10 @@ def main():
         tot.update(c)
         print_row(key[0], key[1] if a.by_role else "all", c)
     print_row("TOTAL", "", tot)
+    hermes = sum(r.get("backend") == "hermes" for r in rows)
+    if hermes:
+        print(f"note: {hermes} run(s) on the hermes backend (enforce=prompt-only); no $ is reported "
+              "for them (list$ counts claude runs only; compare tokens). --by-role shows them as <role>@hermes.")
     if no_tokens:
         print(f"note: {no_tokens} run(s) predate input/cache logging; run with --backfill to fill them.")
     return 0

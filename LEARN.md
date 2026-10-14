@@ -11,7 +11,9 @@ Learn the hermes-dev-team repo at <REPO>. Do these steps in order and stop to as
 
 1. Read <REPO>/README.md, TEAM.md, CHANGELOG.md, and docs/design.md. Do not run anything yet.
 2. Check prerequisites and report each version: `claude --version` (2.1.296 or newer), `python --version`, `git --version`.
-   If claude is missing or not logged in, stop and tell me to run `claude auth login`. Never handle credentials yourself.
+   If claude is missing or not logged in, ask me: run `claude auth login` (recommended), or use the Hermes fallback
+   backend. For the fallback, check `hermes profile list` for `hdt-worker`; if missing, give me the three setup
+   commands from the README's Backends section and wait. Never handle credentials or edit Hermes config yourself.
 3. Skills: run `python <REPO>/kit/link-skills.py` (dry run) and show me its output.
    - Lines "would ... link" are safe. Run it again with `--apply`.
    - A "SKIP ... local copy differs" line means my local skill grew. Show me the diff between my copy and

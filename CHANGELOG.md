@@ -5,6 +5,36 @@ mark an entry **action** when another machine must do something (re-run `link-sk
 
 Format: version, date, then one line per change, naming the file.
 
+## 0.10.0 - 2026-10-14
+
+- `kit/run-worker.py`: **backend-agnostic workers.** `backend` = `auto` (default: claude when `claude auth status`
+  says logged in or `ANTHROPIC_API_KEY` is set, else hermes), `claude`, `hermes`, or a per-role map; `--backend`
+  overrides. The hermes backend runs one headless `hermes -p <hermes_profile> chat --format stream-json` (default
+  profile `hdt-worker`) with `-m <hermes_models[role]>`, optional `--provider <hermes_provider>`, `--source tool`;
+  same dispatch, progress lines, RESULT line and runs.log as claude, tagged `backend=hermes enforce=prompt-only`.
+  A missing profile prints the setup commands and `ERROR no Hermes profile`; the kit never edits Hermes config.
+- `kit/run-worker.py`: new guard for both backends, `FAIL guard:pushed:<remote>` (`git ls-remote` before/after).
+- `kit/run-worker.py`: `effort` key / `--effort` (string or per-role map) -> `--effort` on claude, `--reasoning` on
+  hermes. START shows `claude:<model>/<effort>` or `hermes:<model>/<effort>`. runs.log gains `backend=`.
+- `kit/roles/_tool-rules-hermes.md` (new): tool rules for hermes workers (chaining allowed, forbidden list kept).
+- `kit/costs.py`: hermes runs show as `<role>@hermes` with `$` unknown (tokens are real).
+- `skills/orchestrate`: step 4 says the launcher picks the backend and what to do on a missing profile; step 5 on
+  prompt-only runs; `.team.json` gets written with `test` only unless the user names more; new pitfalls.
+- `skills/claude-p-role-workers`: Backends section. README Backends section, LEARN.md fallback step, design 22-24.
+- **action (optional, per machine):** to use the hermes backend, create the worker profile (README, Backends).
+  Start a new planner session to load the updated skills.
+- Measured on Windows (Sonnet 5.5 medium unless noted; toy repos with a local bare remote):
+
+  | Run | Result |
+  |---|---|
+  | claude, normal ticket | PASS, 15-18 turns, 19-27 s, 0 denials |
+  | claude, push from a second shell during the run | `FAIL guard:pushed:origin \| PASS 8180ec6` |
+  | hermes, `hermes_models.dev = claude-haiku-5-5` | PASS f0b79b4, 34 s, ran on Haiku (`-m` beats the profile default) |
+  | hermes, 4 forbidden chores in the ticket | PASS 03fc86e, 39 s; all 4 refused by the prompt rules; main, branch, tree, remote unchanged |
+  | hermes, `--max-turns 2` | FAIL (out of iterations), exit 1 |
+  | `backend: hermes`, profile missing | `ERROR no Hermes profile nope` + setup commands, exit 2 |
+  | worker sessions in the user's default profile | 0 |
+
 ## 0.9.2 - 2026-10-14
 
 - `kit/tickets.py`: ticket ids keep their letter suffix (`02b` is its own ticket, not `02`); leading zeros are dropped

@@ -34,7 +34,11 @@ This skill does not replace them; it only adds the fields a worker needs (step 2
 Each project has a committed `.team.json` with its full test command, e.g. `{"test": "npm test"}`; optional
 `"models": {"dev": "sonnet"}` and `"protected": ["<file-name glob>", ...]` (more files the dev may not edit, on top of
 the launcher's package/lock/test-config list). If it is missing, ask the user for the test command once and write
-the file (the dev worker cannot edit it).
+the file (the dev worker cannot edit it). Write only `test` plus what the user named; never ask about models, backend
+or effort unless the user brings them up (every other key has a working default).
+Other optional keys: `"effort": "medium"` (or per role), `"backend"` (`auto` default, `claude`, `hermes`, or a per-role
+map), `"hermes_models"` (per role, the provider's full model id), `"hermes_provider"`, `"hermes_profile"` (default
+`hdt-worker`). `models` applies to Claude runs only, `hermes_models` to Hermes runs only.
 
 The glossary is `CONTEXT.md` if the repo has one, else `GLOSSARY.md` (Matt's domain-modeling default). Use whichever
 exists; never create the second one.
@@ -63,10 +67,14 @@ repo; never commit a workspace file into a repo.
    `python -u KIT/run-worker.py dev "ticket: .scratch/<feature>/issues/NN-slug.md"` (workspace scratch: the
    absolute path or `../.scratch/...`; the launcher grants the worker that folder and nothing else outside the repo)
    The launcher takes the test command from the ticket's `Test command:` line (or `.team.json`), so do not retype it.
+   It also picks the backend: Claude when `claude` is logged in or `ANTHROPIC_API_KEY` is set, else the Hermes worker
+   profile; `.team.json` `backend` overrides (per role allowed). Never choose or switch the backend yourself. If it
+   prints `RESULT … ERROR no Hermes profile <name>`, show the user the setup commands it printed and stop; never
+   create or edit a Hermes profile or config yourself.
    Tell the user the `progress:` path from the `START` line, then end your turn; never `process wait` (it blocks the
    heartbeats). A heartbeat shows the worker's new tool-call lines: answer it in one short line with no tool calls
    (each one is a planner turn, so keep it cheap). Act only on the exit notice. Use the same dispatch for steps 8 and 9.
-5. **Read the one result line**: `RESULT dev PASS <sha> | ...` or `RESULT dev FAIL <reason> | ...`, with any denied calls listed under it. Exit 0 means PASS and the guards held (main unmoved, branch unchanged, no history rewrite, no protected file changed). Never trust a bare `claude` exit code: it is 0 even when a worker gives up.
+5. **Read the one result line**: `RESULT dev PASS <sha> | ...` or `RESULT dev FAIL <reason> | ...`, with any denied calls listed under it. Exit 0 means PASS and the guards held (main unmoved, branch unchanged, no history rewrite, no protected file changed). Never trust a bare `claude` exit code: it is 0 even when a worker gives up. A RESULT with `backend=hermes enforce=prompt-only` means nothing blocked the worker while it ran, only the launcher's after-run checks: treat it like any PASS, but in step 6 also confirm `git status --short` is clean, and tell the user once per feature that these runs were prompt-only.
 6. **Verify** with 3 commands: `git log --stat -1`, the ticket's `Test command`, `git status --short`. On PASS set the ticket `review` (quick lane: `done`). On FAIL set it `blocked` and tell the user the reason line.
 7. Repeat 3-6 until every ticket of the current batch is `review` (quick lane: until every ticket is `done`, then step 10).
 8. **Review the batch** (full lane), dispatched as in step 4:
@@ -104,6 +112,8 @@ can still be updated from upstream.
 ## Pitfalls
 
 - Never run two workers at once; the serial chain keeps one branch and one tree.
+- **Hermes backend:** workers run as `hermes -p <profile> chat … --source tool`, so their sessions stay in the worker profile, not the user's chat list. They are prompt-only: a write outside the repo, or a checkout that switches back, is not caught. Their `$` in `costs.py` is unknown (tokens are real). The first run on a new profile is slow because Hermes installs its dependencies once.
+- `FAIL guard:pushed:<remote>` (both backends): the remote's refs changed during the run. Nothing an agent pushes is ever kept; tell the user, who decides what to delete on the remote.
 - A ticket that needs a new dependency or a test-config change FAILs with `guard:test-config-changed` or a denial: the dev may not edit `package.json`, lockfiles, `jest`/`vitest`/`tsconfig` files or `.team.json`, because the allowed test command would run whatever they say. Make that change yourself, with the user's yes, commit it, then re-dispatch.
 - The project's `CLAUDE.md` (with `@` imports inlined), or the `rules` file, is pasted into every worker's prompt by the launcher, capped at `rules_max_chars`; workers do not load it themselves (`--setting-sources ""`). Its rules apply; its permissions do not.
 - Workers may run the test command, which executes code the dev wrote. That hole remains; review before merge.
