@@ -84,10 +84,22 @@ The dispatch is the same command for both; the planner never picks the backend.
   child sessions in the user's own profile).
 - Guards for both backends: main moved, branch changed, history rewritten, protected file changed, and `pushed`
   (`git ls-remote` per remote before/after; an unreadable remote is skipped, not failed).
+- Project rules reach workers only through the launcher's paste (claude: `--setting-sources ""`; hermes:
+  `--ignore-rules`). Default = repo `AGENTS.md` then `CLAUDE.md`, whichever exist, each file once even if `@`-imported;
+  `.team.json` `rules` replaces it. A package-level `AGENTS.md` in a monorepo is NOT pasted unless listed in `rules`.
+  Check the `rules=<files>` field on the START line when a worker ignores a project rule.
 
 ## Process lessons
 
 - Measure a mechanism end to end before designing around it.
+- Test launcher logic that needs no model (config lookup, rules assembly, ticket parsing) by importing the module
+  in a fixture script over several toy dirs; spend worker runs only on behaviour that needs a model.
+- Record every measured run (backend, model/effort, wall, calls, in/cache_w/cache_r/out, $) as a row in the team
+  repo's `docs/benchmarks.md`; the user reads it on the other machine after `git pull`.
+- Do not claim one backend is cheaper from toy runs: say the mechanism (fewer calls, smaller system prompt), n, and
+  that cache reads are billed at a fraction; the real comparison is `dev` vs `dev@hermes` in `costs.py` on a real ticket.
+- Before every commit in the team repo, run `git status --short` and read any `skills/` diff you did not write: a
+  background skill review edits linked skills in place, and `git add -A` silently ships its changes.
 - To judge a new backend's enforcement, run the forbidden-chores ticket twice: once with the forbidden list in the
   prompt, once without. Only the second shows what the backend itself blocks.
 - Never edit Hermes `config.yaml` or create profiles for the user (Hermes refuses it anyway): print the exact

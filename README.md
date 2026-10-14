@@ -46,11 +46,53 @@ The launcher pastes the project's `AGENTS.md` and `CLAUDE.md` (whichever exist, 
 each file once) into every worker's prompt; `"rules": "<file or list>"` replaces that default. START shows `rules=...`.
 The dev worker takes its test command from the ticket; the reviewer uses `test` from `.team.json`.
 
-Several repos side by side in a folder that is not a repo (team files kept out of the repos): put one `.team.json`
-in that folder, e.g. `{"scratch": ".scratch", "rules": "worker-rules.md", "repos": {"api": {"test": "yarn typecheck"},
-"web": {"test": "yarn typecheck"}}}`, run workers with cwd = a repo, and give each ticket a `Repo:` line. A long
-`CLAUDE.md` is cut at `rules_max_chars` (default 40000); point `rules` at a short file instead.
-`python KIT/tickets.py <feature>` checks tickets and prints the approval table.
+A long rules file is cut at `rules_max_chars` (default 40000); point `rules` at a short file instead.
+`python KIT/tickets.py <feature>` checks tickets and prints the approval table; `--next` lists what can run next.
+
+## Project shapes
+
+**Single repo** (the default). `.team.json` at the repo root, scratch in `<repo>/.scratch/` (git-excluded), workers
+run from the root.
+
+```json
+{"test": "npm test"}
+```
+
+**Monorepo** (one git repo, several packages). Same as a single repo: one `.team.json` at the root, workers run from
+the root, one feature branch.
+
+```json
+{"test": "pnpm -r test", "protected": ["vitest.workspace.*"]}
+```
+
+- `test` is the full suite (the reviewer runs it). A ticket's `Test command:` can narrow it to one package, e.g.
+  `pnpm --filter api test`; the dev runs only that.
+- Protected files match by file name at any depth, so every package's `package.json`, `tsconfig*.json` and test
+  config is already protected. Add workspace-level files (e.g. `pnpm-workspace.yaml`) to `protected` if they decide
+  what the tests run.
+- Limit: only the ROOT `AGENTS.md`/`CLAUDE.md` are pasted. A package's own `packages/api/AGENTS.md` is not, unless you
+  list it in `"rules"` or `@`-import it from the root file (both cost prompt space on every run).
+- Not yet measured on a real monorepo.
+
+**Workspace** (several git repos side by side in a folder that is not a repo, team files kept out of the repos). One
+`.team.json` in the workspace folder with shared keys and a `repos` map for per-repo keys:
+
+```json
+{
+  "scratch": ".scratch",
+  "rules": "worker-rules.md",
+  "glossary": "CONTEXT.md",
+  "repos": {"api": {"test": "yarn typecheck"}, "web": {"test": "yarn typecheck"}}
+}
+```
+
+- Scratch (tickets, reviews, runs, `runs.log`) lives in the workspace, outside every repo. The worker gets read/write
+  on that folder only; the sibling repo and the workspace root stay denied (measured on Linux and Windows).
+- Run each worker with cwd = the ticket's repo. Every ticket has a `Repo:` line; the launcher refuses another cwd.
+- One feature branch per repo (same name). A review batch holds tickets of one repo only. `Blocked by` may cross repos.
+- `glossary` names one shared glossary that reviewer and docs read; it is never committed into a repo.
+- Merge order is yours: the upstream repo first (e.g. `api` before `web`).
+- `costs.py` and `tickets.py` find the workspace config from inside any of its repos.
 
 Every run appends to `.scratch/runs.log`; `python KIT/costs.py --by-role` totals it per feature: runs, turns,
 minutes, input / cache write / cache read / output tokens, cache hit %, list price, denials (`--backfill` adds the

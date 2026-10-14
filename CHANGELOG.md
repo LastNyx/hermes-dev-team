@@ -5,6 +5,12 @@ mark an entry **action** when another machine must do something (re-run `link-sk
 
 Format: version, date, then one line per change, naming the file.
 
+## 0.10.3 - 2026-10-14
+
+- `README.md`: new "Project shapes" section (single repo, monorepo, workspace) with an example `.team.json` each.
+  Replaces the one-paragraph workspace note. Monorepo is documented from the code, not yet measured on a real one;
+  a package's own AGENTS.md is not pasted (documented limit).
+
 ## 0.10.2 - 2026-10-14
 
 - `kit/teamcfg.py`, `kit/run-worker.py`: with no `rules` key, worker rules are the repo's `AGENTS.md` and `CLAUDE.md`,
