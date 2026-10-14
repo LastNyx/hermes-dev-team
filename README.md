@@ -42,7 +42,8 @@ the skills, saves the kit path to memory, and runs a smoke test. By hand:
 Each project needs a committed `.team.json`, e.g. `{"test": "npm test"}` (optional `"models": {"docs": "haiku"}`,
 `"protected": ["<file-name glob>"]`). The dev worker can never edit `package.json`, lockfiles, jest/vitest/tsconfig
 files or `.team.json` (they decide what the test command runs); the planner makes those changes.
-The launcher pastes the project's `CLAUDE.md`, with `@` imports inlined, into every worker's prompt.
+The launcher pastes the project's `AGENTS.md` and `CLAUDE.md` (whichever exist, in that order; `@` imports inlined,
+each file once) into every worker's prompt; `"rules": "<file or list>"` replaces that default. START shows `rules=...`.
 The dev worker takes its test command from the ticket; the reviewer uses `test` from `.team.json`.
 
 Several repos side by side in a folder that is not a repo (team files kept out of the repos): put one `.team.json`

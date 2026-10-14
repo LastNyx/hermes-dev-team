@@ -5,6 +5,15 @@ mark an entry **action** when another machine must do something (re-run `link-sk
 
 Format: version, date, then one line per change, naming the file.
 
+## 0.10.2 - 2026-10-14
+
+- `kit/teamcfg.py`, `kit/run-worker.py`: with no `rules` key, worker rules are the repo's `AGENTS.md` and `CLAUDE.md`,
+  whichever exist, in that order (before: `CLAUDE.md` only, so an AGENTS.md-only repo gave workers no rules). A file
+  already pasted is not pasted again, so a `CLAUDE.md` that is just `@AGENTS.md` no longer doubles the text. START
+  shows `rules=<files>` (or `rules=none`), plus `(<n>k>cap)` when cut. An explicit `rules` key still wins.
+- Checked without a model call (6 cases): AGENTS only, CLAUDE only, both, CLAUDE importing AGENTS (pasted once),
+  neither, explicit `rules` key.
+
 ## 0.10.1 - 2026-10-14
 
 - `docs/benchmarks.md` (new): all measured runs so far in one place (claude vs hermes backend, rejected fallbacks,

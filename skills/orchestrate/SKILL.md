@@ -43,8 +43,8 @@ map), `"hermes_models"` (per role, the provider's full model id), `"hermes_provi
 The glossary is `CONTEXT.md` if the repo has one, else `GLOSSARY.md` (Matt's domain-modeling default). Use whichever
 exists; never create the second one.
 
-**Worker rules.** The launcher pastes the repo's `CLAUDE.md` (imports inlined) into every prompt, cut at
-`rules_max_chars` (default 40000; `START` shows `rules=<n>k>cap` when cut). If the project's CLAUDE.md is long, ask the
+**Worker rules.** The launcher pastes the repo's `AGENTS.md` and `CLAUDE.md` (whichever exist; imports inlined, each file once; `START` shows `rules=<files>`) into every prompt, cut at
+`rules_max_chars` (default 40000; `START` adds `(<n>k>cap)` when cut). If those files are long, ask the
 user for a short worker rules file (commit author, no AI trailers, migration checks, ports, toolchain) and set
 `"rules": "<file>"` (a list is fine). Put rules there, not in tickets. `"path": ["~/.local/bin"]` puts folders in front
 of the worker's PATH.
@@ -115,7 +115,7 @@ can still be updated from upstream.
 - **Hermes backend:** workers run as `hermes -p <profile> chat … --source tool`, so their sessions stay in the worker profile, not the user's chat list. They are prompt-only: a write outside the repo, or a checkout that switches back, is not caught. Their `$` in `costs.py` is unknown (tokens are real). The first run on a new profile is slow because Hermes installs its dependencies once.
 - `FAIL guard:pushed:<remote>` (both backends): the remote's refs changed during the run. Nothing an agent pushes is ever kept; tell the user, who decides what to delete on the remote.
 - A ticket that needs a new dependency or a test-config change FAILs with `guard:test-config-changed` or a denial: the dev may not edit `package.json`, lockfiles, `jest`/`vitest`/`tsconfig` files or `.team.json`, because the allowed test command would run whatever they say. Make that change yourself, with the user's yes, commit it, then re-dispatch.
-- The project's `CLAUDE.md` (with `@` imports inlined), or the `rules` file, is pasted into every worker's prompt by the launcher, capped at `rules_max_chars`; workers do not load it themselves (`--setting-sources ""`). Its rules apply; its permissions do not.
+- The project's `AGENTS.md`/`CLAUDE.md` (with `@` imports inlined), or the `rules` file, is pasted into every worker's prompt by the launcher, capped at `rules_max_chars`; workers do not load it themselves (`--setting-sources ""`). Its rules apply; its permissions do not.
 - Workers may run the test command, which executes code the dev wrote. That hole remains; review before merge.
 - `git commit -m x --amend` matches the allowed commit prefix. The launcher's history guard reports it as `FAIL guard:history-rewritten`; restore the old tip from `git reflog`.
 - Commits never carry a Co-Authored-By trailer: the launcher forces `includeCoAuthoredBy: false` and empty `attribution`.

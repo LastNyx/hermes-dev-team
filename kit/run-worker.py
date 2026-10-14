@@ -60,6 +60,8 @@ def project_memory(path, depth=0, seen=None):
         m = re.fullmatch(r"\s*@(\S+)\s*", line)
         if m:
             target = (path.parent / pathlib.Path(m.group(1)).expanduser()).resolve()
+            if target in seen:                        # already pasted (e.g. CLAUDE.md that is just `@AGENTS.md`)
+                continue
             body = project_memory(target, depth + 1, seen)
             out.append(f"<!-- imported from {m.group(1)} -->\n{body}" if body else line)
         else:
@@ -75,19 +77,21 @@ def protected_changes(head_before, patterns):
 
 
 def project_rules(files, cap):
-    """Rules pasted into every worker prompt: the files named by `rules` (default CLAUDE.md), imports inlined, capped.
+    """Rules pasted into every worker prompt: the files named by `rules` (default AGENTS.md + CLAUDE.md), imports inlined, capped.
 
     Measured: a 150k-char CLAUDE.md was pasted whole into every run. Past the cap the text is cut and the worker is
     told where the full file is, so it can Grep it (files inside the repo only; the worker cannot read elsewhere).
     """
-    parts = [(f, project_memory(f)) for f in files]
-    text = "\n\n".join(b.strip() for _, b in parts if b.strip())
+    seen = set()                                      # shared, so a file is pasted once even if imported again
+    parts = [(f, project_memory(f, seen=seen)) for f in files]
+    parts = [(f, b) for f, b in parts if b.strip()]
+    text = "\n\n".join(b.strip() for _, b in parts)
     full = len(text)
     if full > cap:
         where = ", ".join(f.name if f.parent == pathlib.Path.cwd().resolve() else f.as_posix() for f, _ in parts)
         text = text[:cap].rsplit("\n", 1)[0] + (f"\n\n[cut at {cap} of {full} chars; the full text is in {where}: "
                                                "Grep it for the section you need]")
-    return text, full
+    return text, full, [f.name for f, _ in parts]
 
 
 def header_line(ticket, key):
@@ -411,7 +415,7 @@ def main():
     runs = scratch / "runs"; runs.mkdir(parents=True, exist_ok=True)
     stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     out_path, agents_path = runs / f"{stamp}-{a.role}.json", runs / f"{stamp}-{a.role}.agents.json"
-    rules, rules_full = project_rules(tc["rules"], tc["rules_max_chars"])
+    rules, rules_full, rules_used = project_rules(tc["rules"], tc["rules_max_chars"])
     rules_block = ("\n\n## Project rules (imports inlined; they bind you unless a tool rule below forbids the "
                    "action)\n\n" + rules.strip() + "\n") if rules.strip() else ""
     tool_rules = "_tool-rules-hermes.md" if backend == "hermes" else "_tool-rules.md"
@@ -425,7 +429,9 @@ def main():
     st = {"role": a.role, "model": model, "test_cmd": test_cmd, "feature": feature, "repo_name": repo.name,
           "repo": repo.as_posix(), "scratch": scratch.as_posix(), "stamp": stamp, "protected": protected,
           "snapshot": snap, "out_path": out_path.as_posix()}
-    cut = f" rules={round(rules_full / 1000)}k>cap" if rules_full > tc["rules_max_chars"] else ""
+    cut = f" rules={'+'.join(rules_used) or 'none'}"
+    if rules_full > tc["rules_max_chars"]:
+        cut += f"({round(rules_full / 1000)}k>cap)"
 
     env = dict(os.environ)
     if tc["path"]:

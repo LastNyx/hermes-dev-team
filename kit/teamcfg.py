@@ -8,7 +8,7 @@ Lookup, from the repo root (or any folder):
 Relative paths in a config resolve from the folder the config file sits in.
 
 Keys: test, models, protected (as before), scratch (folder for tickets, reviews, runs), rules (file or list of files
-pasted into every worker prompt; default the repo's CLAUDE.md), rules_max_chars (default 40000), path (folders put in
+pasted into every worker prompt; default: the repo's AGENTS.md and CLAUDE.md, whichever exist, in that order), rules_max_chars (default 40000), path (folders put in
 front of PATH for the worker, e.g. ["~/.local/bin"]).
 """
 import json, os, pathlib
@@ -41,7 +41,8 @@ def load(folder=None):
             cfg = {**{k: v for k, v in w.items() if k != "repos"}, **(w["repos"][d.name] or {})}
             base, source = ws.parent, ws
     scratch = (base / cfg.get("scratch", ".scratch")).expanduser().resolve()
-    rules = [(base / r).expanduser().resolve() for r in _list(cfg.get("rules"))] or [d / "CLAUDE.md"]
+    rules = [(base / r).expanduser().resolve() for r in _list(cfg.get("rules"))] or \
+        [d / n for n in ("AGENTS.md", "CLAUDE.md") if (d / n).is_file()]
     path = [str(pathlib.Path(p).expanduser()) for p in _list(cfg.get("path"))]
     return {"cfg": cfg, "source": source, "base": base, "scratch": scratch, "rules": rules, "path": path,
             "rules_max_chars": int(cfg.get("rules_max_chars", RULES_MAX_CHARS))}
