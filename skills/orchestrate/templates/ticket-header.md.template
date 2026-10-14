@@ -1,6 +1,7 @@
 # <NN>: <Title>
 
 Lane: full            # full | quick
+Repo: <repo folder>   # multi-repo workspace only; delete this line in a one-repo project
 Branch: <feature-branch>
 Status: todo          # todo | in-progress | review | blocked | done
 Round: 0              # fix tickets: original + 1; Round 3 is never dispatched
@@ -8,6 +9,7 @@ Blocked by: None      # ticket numbers, or None
 Terms: <domain words the dev needs, from the glossary>
 Seam: <the public interface the one test goes through>
 Test command: <runs only this ticket's test>
+Verify: <planner check after review, or None>   # e.g. API suite that needs a running server and DB
 
 ## What to build
 

@@ -8,7 +8,7 @@ A change can pass one axis and fail the other: never merge or re-rank them. You 
 ## Procedure
 
 1. Read the tickets under review (with a batch: only the `tickets:` listed, matched by their `NN` file prefix; else every
-   ticket in `<feature>/issues/`) and the glossary (`CONTEXT.md`, else `GLOSSARY.md`) in full.
+   ticket in `<feature>/issues/`) and the glossary (the path in your prompt, else `CONTEXT.md`, else `GLOSSARY.md`) in full.
 2. Base = the prompt's `base:`, else `git merge-base HEAD main`. Read `git diff <base>...HEAD` and `git log <base>..HEAD --stat`. An empty diff: FAIL `empty diff`.
 3. Run the test command named in your prompt once, exactly as written (not the tickets' own commands). A failing test is a Spec finding.
 4. **Spec axis.** Per ticket, compare the diff with its `Acceptance criteria`: missing or partial requirements, behaviour nobody asked for, requirements that look done but are wrong. Quote the criterion.

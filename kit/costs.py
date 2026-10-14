@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Summarise .scratch/runs.log: one line per feature (and per role with --by-role). No model is called.
 
-Usage (cwd = the project repo):  python <kit>/costs.py [--feature NAME] [--by-role] [--log PATH] [--backfill]
+Usage (cwd = a project repo or a workspace with a .team.json):  python <kit>/costs.py [--feature NAME] [--by-role] [--log PATH] [--backfill]
 Prices are list price from Claude Code's JSON; a subscription seat is billed differently.
 
 Token columns: in = uncached input, cache_w = input written to the prompt cache, cache_r = input read from it,
@@ -10,6 +10,9 @@ out = output. Total prompt size is in + cache_w + cache_r; hit% = cache_r / that
 (it rewrites runs.log in place, keeping a copy in .scratch/runs/, which is ignored, so the tree stays clean).
 """
 import argparse, collections, datetime, json, pathlib, shutil, sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import teamcfg  # noqa: E402
 
 TOKEN_KEYS = {"in": "input_tokens", "cw": "cache_creation_input_tokens", "cr": "cache_read_input_tokens",
               "out": "output_tokens"}
@@ -79,12 +82,12 @@ def print_row(label, role, c):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--log", default=".scratch/runs.log")
+    ap.add_argument("--log", help="default: runs.log in the scratch folder (.team.json `scratch`, else .scratch)")
     ap.add_argument("--feature")
     ap.add_argument("--by-role", action="store_true")
     ap.add_argument("--backfill", action="store_true", help="add token columns to pre-0.8.0 lines, then summarise")
     a = ap.parse_args()
-    p = pathlib.Path(a.log)
+    p = pathlib.Path(a.log) if a.log else teamcfg.load()["scratch"] / "runs.log"
     if not p.exists():
         print(f"no log at {p}"); return 1
     if a.backfill:

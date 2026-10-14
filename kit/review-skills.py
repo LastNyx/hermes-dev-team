@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
 """Show what grew in the team skills since the last commit, and draft the CHANGELOG lines. No model is called.
 
-Usage:  python <kit>/review-skills.py [--stat]
+Usage:  python <kit>/review-skills.py [--stat] [--patch]
 Skills are linked into Hermes (link-skills.py), so Hermes' edits appear as uncommitted changes under skills/.
 Exit 0 = nothing changed, 1 = changes to review.
 
 Then: keep what helps every project, `git restore skills/<name>` what does not, paste the draft into
 CHANGELOG.md under a new version, commit.
+
+--patch prints ONE `git apply`-able patch of every uncommitted change in the repo (skills, kit, docs, new files
+included) and nothing else, for a machine that cannot push: save it to a file, apply it on a machine that can with
+`git apply <file>`. The index is restored afterwards.
 """
 import argparse, pathlib, re, subprocess, sys
 
@@ -22,7 +26,21 @@ def git(*args):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--stat", action="store_true", help="file list only, no diff body")
+    ap.add_argument("--patch", action="store_true", help="print one git-apply patch of every uncommitted change")
     a = ap.parse_args()
+    if a.patch:
+        new = [l[3:].strip().strip('"') for l in git("status", "--porcelain").splitlines() if l.startswith("??")]
+        if new:
+            git("add", "--intent-to-add", "--", *new)          # so untracked files show in the diff
+        try:
+            out = git("diff", "--binary", "HEAD")
+        finally:
+            if new:
+                git("reset", "--quiet", "--", *new)            # back to untracked; the files are untouched
+        if not out.strip():
+            print("# nothing to hand over: no uncommitted changes", file=sys.stderr); return 0
+        sys.stdout.write(f"# base: {git('rev-parse', '--short', 'HEAD').strip()}\n" + out)
+        return 1
     status = [l for l in git("status", "--porcelain", "--", "skills").splitlines() if l.strip()]
     if not status:
         print("skills: no changes since the last commit."); return 0

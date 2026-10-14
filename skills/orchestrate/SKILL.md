@@ -1,7 +1,7 @@
 ---
 name: orchestrate
 description: Run dev, reviewer, docs workers on tickets; verify results.
-version: 0.3.0
+version: 0.4.0
 author: hermes-dev-team contributors
 license: MIT
 platforms: [linux, macos, windows]
@@ -39,13 +39,29 @@ the file (the dev worker cannot edit it).
 The glossary is `CONTEXT.md` if the repo has one, else `GLOSSARY.md` (Matt's domain-modeling default). Use whichever
 exists; never create the second one.
 
+**Worker rules.** The launcher pastes the repo's `CLAUDE.md` (imports inlined) into every prompt, cut at
+`rules_max_chars` (default 40000; `START` shows `rules=<n>k>cap` when cut). If the project's CLAUDE.md is long, ask the
+user for a short worker rules file (commit author, no AI trailers, migration checks, ports, toolchain) and set
+`"rules": "<file>"` (a list is fine). Put rules there, not in tickets. `"path": ["~/.local/bin"]` puts folders in front
+of the worker's PATH.
+
+**Multi-repo workspace** (several git repos side by side in a folder that is not a repo, team files kept out of the
+repos): the workspace holds one `.team.json` with shared keys, `"scratch": ".scratch"`, optional `"glossary"`, and
+`"repos": {"<folder>": {"test": "..."}}` for per-repo keys. The launcher, `costs.py` and `tickets.py` find it from inside
+a repo. Then: one feature folder in the workspace scratch; one feature branch per repo (same name); every ticket has a
+`Repo:` line (the launcher refuses another cwd); `Blocked by` may cross repos; a batch holds tickets of one repo only;
+dispatch with cwd = the ticket's repo; the user merges the upstream repo first (e.g. API before UI). Glossary and
+ADRs: one workspace-level glossary when the terms are shared (set `"glossary"`; reviewer and docs read it), else one per
+repo; never commit a workspace file into a repo.
+
 ## Procedure
 
-1. **Branch.** Create the feature branch from main. Add `.scratch/` to `.git/info/exclude`. Commit the glossary and ADRs on the branch as `docs: context`. The launcher refuses to run on main or master.
-2. **Make tickets dispatchable.** `to-tickets` writes `.scratch/<feature>/issues/NN-slug.md` with `**Blocked by:**` and `**Status:**` lines. First check the format: if a ticket lacks either the `**Blocked by:**` or the `**Status:**` line, stop and tell the user that Matt's `to-tickets` format has changed upstream and step 2 needs updating; do not guess. Before the first dispatch, replace those two lines in each ticket with the header in this skill's `templates/ticket-header.md.template` (`skill_view` with file_path): `Lane`, `Branch`, `Status: todo`, `Round: 0`, `Blocked by`, `Terms`, `Seam`, `Test command`. Keep the body and its acceptance criteria. A worker has no web and cannot ask: put every fact it needs in the ticket. Show the user the Seam and Test command per ticket in one list, plus the proposed **review batches** (full lane): each batch is one milestone, a set of tickets that delivers one usable capability, at most 4 tickets, in dependency order. They approve both before step 3. Record the batches in `.scratch/<feature>/batches.md` (one line per batch: `<b>: NN,NN,... base: <sha or blank>`). The launcher reads only the plain `Test command:` line.
-3. **Pick** the next `todo` ticket whose `Blocked by` tickets are all `done`. Set it `in-progress` yourself; workers never change a ticket's Status.
-4. **Dispatch dev** with `terminal(background=true, heartbeat=120)`, cwd = the repo:
-   `python -u KIT/run-worker.py dev "ticket: .scratch/<feature>/issues/NN-slug.md"`
+1. **Branch.** Create the feature branch from main (multi-repo: in each repo the feature touches). With an in-repo scratch folder, add `.scratch/` to `.git/info/exclude`. Commit the glossary and ADRs on the branch as `docs: context` (a workspace-level glossary is not committed). The launcher refuses to run on main or master.
+2. **Make tickets dispatchable.** Run `python KIT/tickets.py <feature> --add-header` (dry run, then `--apply`): it moves flat `NN-*.md` files into `issues/` and inserts the header after the title, keeping the body and Matt's `Blocked by`; then fill the placeholders. `python KIT/tickets.py <feature>` checks every ticket and prints the approval table (repo, status, blockers, Seam, Test command, Verify); exit 0 means dispatchable. `to-tickets` writes `.scratch/<feature>/issues/NN-slug.md` with `**Blocked by:**` and `**Status:**` lines. First check the format: if a ticket lacks either the `**Blocked by:**` or the `**Status:**` line, stop and tell the user that Matt's `to-tickets` format has changed upstream and step 2 needs updating; do not guess. Before the first dispatch, replace those two lines in each ticket with the header in this skill's `templates/ticket-header.md.template` (`skill_view` with file_path): `Lane`, `Branch`, `Status: todo`, `Round: 0`, `Blocked by`, `Terms`, `Seam`, `Test command`. Keep the body and its acceptance criteria. A worker has no web and cannot ask: put every fact it needs in the ticket. **Test command vs Verify.** `Test command` is what the dev may run: it must be cheap and safe with no running services and no database writes (typecheck, lint, unit tests, a headless browser test that starts its own server). A check that needs a running server, a database, or the user's say-so goes on the `Verify:` line instead (else `None`): you run it yourself after the batch's review passes, ask first if a project rule requires it, and write the outcome under the ticket's `## Result`. Show the user the Seam, Test command and Verify per ticket in one list (the `tickets.py` table), plus the proposed **review batches** (full lane): each batch is one milestone, a set of tickets that delivers one usable capability, at most 4 tickets, in dependency order. They approve both before step 3. Record the batches in `.scratch/<feature>/batches.md` (one line per batch: `<b>: NN,NN,... base: <sha or blank>`). The launcher reads only the plain `Test command:` line.
+3. **Pick** the next `todo` ticket whose `Blocked by` tickets are all `done` (`python KIT/tickets.py <feature> --next` lists them). Set it `in-progress` yourself; workers never change a ticket's Status.
+4. **Dispatch dev** with `terminal(background=true, heartbeat=120)`, cwd = the repo (multi-repo: the ticket's `Repo`):
+   `python -u KIT/run-worker.py dev "ticket: .scratch/<feature>/issues/NN-slug.md"` (workspace scratch: the
+   absolute path or `../.scratch/...`; the launcher grants the worker that folder and nothing else outside the repo)
    The launcher takes the test command from the ticket's `Test command:` line (or `.team.json`), so do not retype it.
    Tell the user the `progress:` path from the `START` line, then end your turn; never `process wait` (it blocks the
    heartbeats). A heartbeat shows the worker's new tool-call lines: answer it in one short line with no tool calls
@@ -57,13 +73,13 @@ exists; never create the second one.
    `python -u KIT/run-worker.py reviewer "feature: .scratch/<feature> batch: <b> tickets: NN,NN base: <sha> round: <n>"`
    (full test command from `.team.json`). `base` is the commit before the batch started: `git merge-base HEAD main` for
    batch 1, else the HEAD recorded when the previous batch passed review; write it into `batches.md`. PASS: set the
-   batch's tickets `done`, record the current HEAD as the next batch's base, and go back to step 3 for the next batch.
+   batch's tickets `done` (after running each ticket's `Verify`, if any), record the current HEAD as the next batch's base, and go back to step 3 for the next batch.
    FAIL: it wrote `review-<b>-<n>.md` and fix tickets (`NN-fix-*.md`, Status `todo`); dispatch those as in step 4, add
    them to the batch's `tickets:`, then review with round n+1 and the same base. Round 3 is never dispatched: ask the user.
    Before dispatching a fix ticket, check its `Seam`: a dev with `Seam: None` FAILs in seconds without writing code. For a refactor-only fix, name the function or file touched and add "refactor only, existing tests are the check".
 9. **Docs** (full lane, all `done`): `python KIT/run-worker.py docs "feature: .scratch/<feature>"`. Read `drift.md` and tell the user the items.
    The docs worker has 25 turns; a job that edits more than three files still hits the cap after editing but before committing. Split it, or hand it a facts file (`.scratch/<feature>/docs-facts.md`) with only planner-verified facts, since it has no device or web.
-10. **Merge.** Tell the user the branch is ready. The user runs `git merge --no-ff`. Never merge, delete a branch, or push.
+10. **Merge.** Tell the user the branch is ready (multi-repo: every repo's branch, and the merge order). The user runs `git merge --no-ff`. Never merge, delete a branch, or push.
 11. **Lessons.** Show the user each line of `.scratch/dev-notes.md`. With their say-so, add the approved project facts to `docs/dev-notes.md` on main (60 lines or fewer), commit as `docs: dev notes`, and clear the scratch file. A lesson that helps every project goes into the team repo's `kit/roles/*.md` only after the user has read it.
 
 ## Cost log
@@ -80,14 +96,16 @@ size is in + cache_w + cache_r (cache_r is usually the bulk) and `hit%` is the s
 The team skills (orchestrate, claude-p-role-workers) are linked into the team repo, so any `skill_manage` edit to them
 is an uncommitted change there. Before patching one, show the user the proposed change in one or two lines and wait
 for a yes. Keep it general: no project paths or names. At the end of a session that changed one, tell the user to run
-`python KIT/review-skills.py`, then commit. Matt Pocock's skills are not part of the repo: never patch them, so they
+`python KIT/review-skills.py`, then commit. If this machine cannot push to the team repo, run
+`python KIT/review-skills.py --patch > <file>`, give the user that file plus a one-line prompt for their other machine
+(`git pull`, then `git apply <file>`, show the diff, commit after a yes), and restore the local tree with `git restore`. Matt Pocock's skills are not part of the repo: never patch them, so they
 can still be updated from upstream.
 
 ## Pitfalls
 
 - Never run two workers at once; the serial chain keeps one branch and one tree.
 - A ticket that needs a new dependency or a test-config change FAILs with `guard:test-config-changed` or a denial: the dev may not edit `package.json`, lockfiles, `jest`/`vitest`/`tsconfig` files or `.team.json`, because the allowed test command would run whatever they say. Make that change yourself, with the user's yes, commit it, then re-dispatch.
-- The project's `CLAUDE.md` (with `@` imports inlined) is pasted into every worker's prompt by the launcher; workers do not load it themselves (`--setting-sources ""`). Its rules apply; its permissions do not.
+- The project's `CLAUDE.md` (with `@` imports inlined), or the `rules` file, is pasted into every worker's prompt by the launcher, capped at `rules_max_chars`; workers do not load it themselves (`--setting-sources ""`). Its rules apply; its permissions do not.
 - Workers may run the test command, which executes code the dev wrote. That hole remains; review before merge.
 - `git commit -m x --amend` matches the allowed commit prefix. The launcher's history guard reports it as `FAIL guard:history-rewritten`; restore the old tip from `git reflog`.
 - Commits never carry a Co-Authored-By trailer: the launcher forces `includeCoAuthoredBy: false` and empty `attribution`.

@@ -4,9 +4,12 @@
 Usage (cwd = the project repo root):
     python <kit>/run-worker.py <role> "<prompt>" [--test-cmd "<cmd>"] [--model M] [--max-turns N]
 
+Config: the repo's .team.json, or a workspace ../.team.json whose "repos" map names this folder (see teamcfg.py).
 The allowed test command is found in this order: --test-cmd; for dev, the ticket's `Test command:` line
-(prompt `ticket: <path>`); then `"test"` in the project's .team.json. Models can be set per role in
-.team.json `"models": {"dev": "sonnet"}`. The feature name for the cost log comes from `.scratch/<feature>/` in the prompt.
+(prompt `ticket: <path>`); then `"test"` in the config. Models can be set per role with `"models": {"dev": "sonnet"}`.
+`ticket:` and `feature:` paths may point outside the repo (a workspace scratch folder): the launcher grants the worker
+read/write on the scratch folder only and tells it where that folder is. A ticket with a `Repo:` line refuses to run
+from any other folder. The feature name for the cost log is the first folder under the scratch folder.
 
 Roles live next to this file: roles/<role>.md (prompt) and roles/<role>.json (settings).
 While the worker runs, prints one progress line per tool call (and per permission denial) and writes the same lines
@@ -19,7 +22,10 @@ Measured facts this relies on (Claude Code 2.1.296):
 - `--setting-sources ""` ignores user/project settings, so a repo's .claude/settings.json cannot widen the allow-list.
 - `Edit(path)` rules govern both Edit and Write; deny rules beat allow rules.
 """
-import argparse, datetime, fnmatch, json, pathlib, re, shutil, subprocess, sys, time
+import argparse, datetime, fnmatch, json, os, pathlib, re, shutil, subprocess, sys, time
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import teamcfg  # noqa: E402
 
 KIT = pathlib.Path(__file__).resolve().parent
 DEFAULTS = {"dev": ("sonnet", 40), "reviewer": ("sonnet", 25), "docs": ("haiku", 25)}
@@ -68,23 +74,50 @@ def protected_changes(head_before, patterns):
     return sorted({n for n in names if any(fnmatch.fnmatch(pathlib.PurePosixPath(n).name, p) for p in patterns)})
 
 
-def load_team_cfg():
-    p = pathlib.Path(".team.json")
-    if not p.exists():
-        return {}
-    try:
-        return json.loads(p.read_text(encoding="utf-8"))
-    except ValueError as e:
-        raise SystemExit(f"RESULT ERROR .team.json is not valid JSON: {e}")
+def project_rules(files, cap):
+    """Rules pasted into every worker prompt: the files named by `rules` (default CLAUDE.md), imports inlined, capped.
+
+    Measured: a 150k-char CLAUDE.md was pasted whole into every run. Past the cap the text is cut and the worker is
+    told where the full file is, so it can Grep it (files inside the repo only; the worker cannot read elsewhere).
+    """
+    parts = [(f, project_memory(f)) for f in files]
+    text = "\n\n".join(b.strip() for _, b in parts if b.strip())
+    full = len(text)
+    if full > cap:
+        where = ", ".join(f.name if f.parent == pathlib.Path.cwd().resolve() else f.as_posix() for f, _ in parts)
+        text = text[:cap].rsplit("\n", 1)[0] + (f"\n\n[cut at {cap} of {full} chars; the full text is in {where}: "
+                                               "Grep it for the section you need]")
+    return text, full
 
 
-def ticket_test_cmd(prompt):
-    m = re.search(r"ticket:\s*(\S+)", prompt)
-    if not m or not pathlib.Path(m.group(1)).exists():
+def header_line(ticket, key):
+    """Value of a plain `Key: value` header line in a ticket, or None (placeholders like `<...>` count as None)."""
+    if not ticket or not ticket.is_file():
         return None
-    t = re.search(r"^Test command:\s*(.+?)\s*$", pathlib.Path(m.group(1)).read_text(encoding="utf-8"), re.M)
-    cmd = t.group(1).strip().strip("`").strip() if t else ""
-    return cmd if cmd and not cmd.startswith("<") else None
+    t = re.search(rf"^{key}:\s*(.+?)\s*$", ticket.read_text(encoding="utf-8"), re.M)
+    v = t.group(1).split("  #")[0].strip().strip("`").strip() if t else ""
+    return v if v and not v.startswith("<") else None
+
+
+def prompt_path(prompt, key):
+    m = re.search(rf"{key}:\s*(\S+)", prompt)
+    return pathlib.Path(m.group(1)).expanduser().resolve() if m else None
+
+
+def rel(p):
+    """Repo-relative path for printing when the file is inside the repo, else absolute."""
+    try:
+        return pathlib.Path(p).resolve().relative_to(pathlib.Path.cwd().resolve()).as_posix()
+    except ValueError:
+        return pathlib.Path(p).as_posix()
+
+
+def scratch_rule(rule, scratch, repo):
+    """Copy a role's `Tool(./.scratch/...)` rule onto a scratch folder outside the repo (`//` = absolute path)."""
+    m = re.fullmatch(r"(\w+)\(\./\.scratch(/.*)?\)", rule)
+    if not m or scratch == repo / ".scratch":
+        return None
+    return f"{m.group(1)}(/{scratch.as_posix()}{m.group(2) or ''})"
 
 
 def tool_line(name, inp):
@@ -109,7 +142,7 @@ def short(n):
     return f"{n / 1e6:.1f}M" if n >= 1e6 else f"{round(n / 1e3)}k" if n >= 1e3 else str(n)
 
 
-def stream_worker(cmd, progress_path):
+def stream_worker(cmd, progress_path, env=None):
     """Run claude with stream-json, print + log one line per tool call and per denial; return the final result event.
 
     The final `result` event carries the same fields as --output-format json (subtype, result, num_turns, usage,
@@ -118,7 +151,7 @@ def stream_worker(cmd, progress_path):
     """
     t0, final, names = time.time(), None, {}
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                            encoding="utf-8", errors="replace")
+                            encoding="utf-8", errors="replace", env=env)
     with open(progress_path, "w", encoding="utf-8") as log:
         def emit(msg):
             s = f"  [{round(time.time() - t0):>4}s] {msg}"
@@ -174,14 +207,19 @@ def main():
     if git("rev-parse", "--show-toplevel") is None:
         print(f"RESULT {a.role} ERROR cwd is not a git repo"); return 2
 
-    cfg = load_team_cfg()
+    tc = teamcfg.load()
+    cfg, scratch, repo = tc["cfg"], tc["scratch"], pathlib.Path.cwd().resolve()
+    ticket = prompt_path(a.prompt, "ticket")
+    want_repo = header_line(ticket, "Repo")
+    if want_repo and want_repo != repo.name:
+        print(f"RESULT {a.role} ERROR ticket is for repo {want_repo}, cwd is {repo.name}"); return 2
     model, turns = DEFAULTS.get(a.role, ("sonnet", 25))
     model = a.model or (cfg.get("models") or {}).get(a.role) or model
     turns = a.max_turns or turns
-    test_cmd = a.test_cmd or (ticket_test_cmd(a.prompt) if a.role == "dev" else None) or \
+    test_cmd = a.test_cmd or (header_line(ticket, "Test command") if a.role == "dev" else None) or \
         (cfg.get("test") if a.role != "docs" else None)
-    fm = re.search(r"\.scratch/([^/\s]+)", a.prompt)
-    feature = fm.group(1) if fm else "-"
+    target = ticket or prompt_path(a.prompt, "feature")
+    feature = target.relative_to(scratch).parts[0] if target and scratch in target.parents else "-"
 
     settings = json.loads(settings_file.read_text(encoding="utf-8"))
     settings["includeCoAuthoredBy"] = False                      # always, whatever the role file says
@@ -190,17 +228,39 @@ def main():
     # measured: Edit(**/<name>) denies the file at the root and in subfolders, for both Edit and Write
     settings["permissions"].setdefault("deny", []).extend(f"Edit(**/{p})" for p in protected)
     prompt = a.prompt
+    outside = scratch != repo / ".scratch"
+    if outside:
+        # measured: Read(//abs/**) + Edit(//abs/**) let a worker read and edit a folder outside its cwd, no --add-dir
+        # needed; a sibling folder stayed denied. Dev gets the same reach it has on an in-repo .scratch.
+        perms = settings["permissions"]
+        for key in ("allow", "deny"):
+            perms[key] += [r for r in (scratch_rule(x, scratch, repo) for x in perms[key]) if r]
+        if a.role == "dev":
+            perms["allow"] += [f"Read(/{scratch.as_posix()}/**)", f"Edit(/{scratch.as_posix()}/**)"]
+            perms["deny"].append(f"Edit(/{scratch.as_posix()}/runs/**)")
+        for key in ("ticket", "feature"):                    # absolute, so the allow rule matches what the worker opens
+            pp = prompt_path(prompt, key)
+            if pp:
+                prompt = re.sub(rf"{key}:\s*\S+", lambda _m, k=key, v=pp: f"{k}: {v.as_posix()}", prompt, count=1)
+        prompt += (f"\nThe scratch folder is {scratch.as_posix()}: wherever your instructions say `.scratch/`, use that"
+                   " folder (absolute paths).")
+    glossary = cfg.get("glossary")
+    if glossary and a.role != "dev":
+        gp = (tc["base"] / glossary).expanduser().resolve()
+        settings["permissions"]["allow"].append(f"Read(/{gp.as_posix()})")
+        settings["permissions"]["deny"].append(f"Edit(/{gp.as_posix()})")
+        prompt += f"\nThe glossary is {gp.as_posix()} (read it there; never edit it)."
     if test_cmd:
         settings["permissions"]["allow"].append(f"Bash({test_cmd})")
         # measured: without this line a reviewer ran the ticket's narrower command and was denied
         prompt += f"\nThe only test command you may run is exactly: {test_cmd}"
 
-    runs = pathlib.Path(".scratch/runs"); runs.mkdir(parents=True, exist_ok=True)
+    runs = scratch / "runs"; runs.mkdir(parents=True, exist_ok=True)
     stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     out_path, agents_path = runs / f"{stamp}-{a.role}.json", runs / f"{stamp}-{a.role}.agents.json"
-    rules = project_memory(pathlib.Path("CLAUDE.md"))
-    rules_block = ("\n\n## Project rules (the repo's CLAUDE.md, imports inlined; they bind you unless a tool rule "
-                   "below forbids the action)\n\n" + rules.strip() + "\n") if rules.strip() else ""
+    rules, rules_full = project_rules(tc["rules"], tc["rules_max_chars"])
+    rules_block = ("\n\n## Project rules (imports inlined; they bind you unless a tool rule below forbids the "
+                   "action)\n\n" + rules.strip() + "\n") if rules.strip() else ""
     agents_path.write_text(json.dumps({a.role: {
         "description": f"{a.role} worker",
         "prompt": prompt_file.read_text(encoding="utf-8").rstrip() + rules_block + "\n\n"
@@ -215,9 +275,13 @@ def main():
            "--settings", json.dumps(settings), "--setting-sources", "", "--model", model,
            "--max-turns", str(turns), "--output-format", "stream-json", "--verbose", "--no-session-persistence"]
     progress_path = runs / f"{stamp}-{a.role}.progress.log"
-    print(f"START {a.role} {model} max-turns={turns} | progress: {progress_path.as_posix()}", flush=True)
+    cut = f" rules={round(rules_full / 1000)}k>cap" if rules_full > tc["rules_max_chars"] else ""
+    print(f"START {a.role} {model} max-turns={turns}{cut} | progress: {rel(progress_path)}", flush=True)
+    env = dict(os.environ)
+    if tc["path"]:
+        env["PATH"] = os.pathsep.join(tc["path"] + [env.get("PATH", "")])
     t0 = time.time()
-    d = stream_worker(cmd, progress_path)
+    d = stream_worker(cmd, progress_path, env)
     secs = round(time.time() - t0)
     out_path.write_text(json.dumps(d), encoding="utf-8")
 
@@ -244,13 +308,13 @@ def main():
     tin, tcw, tcr, tout = (u.get(k) for k in ("input_tokens", "cache_creation_input_tokens",
                                                "cache_read_input_tokens", "output_tokens"))
     line = (f"{stamp}\t{a.role}\t{model}\t{verdict}\tturns={d.get('num_turns')}\t{secs}s\t"
-            f"out={tout}\tlist$={d.get('total_cost_usd')}\tdenials={len(denials)}\t{out_path.as_posix()}\t"
-            f"feature={feature}\ttest={test_cmd or '-'}\tin={tin}\tcw={tcw}\tcr={tcr}")
-    with open(".scratch/runs.log", "a", encoding="utf-8") as f:
+            f"out={tout}\tlist$={d.get('total_cost_usd')}\tdenials={len(denials)}\t{rel(out_path)}\t"
+            f"feature={feature}\ttest={test_cmd or '-'}\tin={tin}\tcw={tcw}\tcr={tcr}\trepo={repo.name}")
+    with open(scratch / "runs.log", "a", encoding="utf-8") as f:
         f.write(line + "\n")
     print(f"RESULT {a.role} {verdict} | turns={d.get('num_turns')} {secs}s denials={len(denials)} "
           f"tok=in {short(tin)} / cache {short((tcw or 0) + (tcr or 0))} / out {short(tout)} "
-          f"test={test_cmd or '-'} | {out_path.as_posix()}")
+          f"test={test_cmd or '-'} | {rel(out_path)}")
     for x in denials[:5]:
         i = x.get("tool_input") or {}
         print(f"  denied {x.get('tool_name')}: {i.get('command') or i.get('file_path')}")

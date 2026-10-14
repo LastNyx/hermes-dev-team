@@ -5,6 +5,33 @@ mark an entry **action** when another machine must do something (re-run `link-sk
 
 Format: version, date, then one line per change, naming the file.
 
+## 0.9.0 - 2026-10-14
+
+- `kit/teamcfg.py` (new): one place that finds the config. A repo's `.team.json` as before, or a WORKSPACE
+  `../.team.json` with `"repos": {"<folder>": {...}}` for several repos side by side whose team files stay out of the
+  repos. New keys: `scratch` (folder for tickets/reviews/runs), `rules` (file or list pasted into worker prompts instead
+  of CLAUDE.md), `rules_max_chars` (default 40000), `path` (folders put in front of the worker's PATH), `glossary`.
+- `kit/run-worker.py`: `ticket:`/`feature:` may point outside the repo; with a scratch folder outside the repo the
+  worker gets `Read`/`Edit` on that folder only (measured: `Read(//abs/**)` + `Edit(//abs/**)` work without
+  `--add-dir`; the sibling repo and the workspace root stayed denied). A ticket's `Repo:` line refuses any other cwd.
+  Project rules are cut at `rules_max_chars` with a pointer to the full file (`START ... rules=152k>cap`; measured:
+  the worker Grepped the file for a line past the cut). `runs.log` gains `repo=`.
+- `kit/tickets.py` (new): `--add-header [--apply]` moves flat `NN-*.md` into `issues/` and inserts the worker header;
+  without flags it checks every ticket and prints the approval table (repo, status, blockers, Seam, Test command,
+  Verify); `--next` lists dispatchable tickets (cross-repo `Blocked by` included).
+- `skills/orchestrate/templates/ticket-header.md.template`: `Repo:` (multi-repo only) and `Verify:` (a planner-run
+  check that needs a server, a DB, or the user's say-so; `None` otherwise).
+- `skills/orchestrate` 0.4.0: worker rules file, multi-repo workspace (branch per repo, batches per repo, merge order,
+  workspace glossary), Test command vs Verify, `tickets.py` in steps 2-3, `review-skills.py --patch` hand-over.
+- `kit/review-skills.py --patch`: one `git apply`-able patch of every uncommitted change (new files included), for a
+  machine that cannot push.
+- `kit/costs.py`: finds `runs.log` in the configured scratch folder (works from a workspace or a repo).
+- `kit/roles/dev.md`: Verify is never run by the dev; a typecheck/lint-only test command is code-first.
+  `reviewer.md`, `docs.md`: glossary path may come from the prompt.
+- Measured on a toy workspace (two repos, workspace scratch, rules file, glossary): dev api PASS 21 s, dev ui PASS
+  24 s, reviewer ui PASS 12 s, 0 denials; a probe ticket was denied writing the sibling repo and reading the workspace
+  root. One-repo projects behave as before.
+
 ## 0.8.1 - 2026-10-13
 
 - `kit/costs.py --backfill`: the backup goes to `.scratch/runs/runs.log.<stamp>.bak` (ignored) instead of

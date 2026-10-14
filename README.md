@@ -43,6 +43,12 @@ files or `.team.json` (they decide what the test command runs); the planner make
 The launcher pastes the project's `CLAUDE.md`, with `@` imports inlined, into every worker's prompt.
 The dev worker takes its test command from the ticket; the reviewer uses `test` from `.team.json`.
 
+Several repos side by side in a folder that is not a repo (team files kept out of the repos): put one `.team.json`
+in that folder, e.g. `{"scratch": ".scratch", "rules": "worker-rules.md", "repos": {"api": {"test": "yarn typecheck"},
+"web": {"test": "yarn typecheck"}}}`, run workers with cwd = a repo, and give each ticket a `Repo:` line. A long
+`CLAUDE.md` is cut at `rules_max_chars` (default 40000); point `rules` at a short file instead.
+`python KIT/tickets.py <feature>` checks tickets and prints the approval table.
+
 Every run appends to `.scratch/runs.log`; `python KIT/costs.py --by-role` totals it per feature: runs, turns,
 minutes, input / cache write / cache read / output tokens, cache hit %, list price, denials (`--backfill` adds the
 token columns to runs logged before 0.8.0).
