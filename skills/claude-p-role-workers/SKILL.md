@@ -21,11 +21,13 @@ Reference implementation: this repo's `kit/run-worker.py` and `kit/roles/`. Evid
 Changing `kit/run-worker.py` or a role file, adding a role, or debugging a worker that FAILs or gets denied.
 For the day-to-day dispatch loop, use `orchestrate` instead.
 
-## Why claude -p and not Hermes profiles
+## Why claude -p first
 
 Headless Hermes auto-approves commands, so nothing enforces a worker's limits. A Hermes provider that wraps Claude Code
 turns Claude Code's own tools off, so its allow-lists cannot guard a Hermes worker. Only a direct `claude -p` worker
-gets the allow-list. It was also about 5x faster on the same trivial ticket.
+gets the allow-list, so Claude stays the default backend; a Hermes worker profile is the prompt-only fallback
+(see Backends). Keep the fallback on a plain provider (e.g. anthropic): the claude-subscription plugin spawns one
+`claude` per model call and made a headless run ~3x slower.
 
 ## Rules (each one cost a failed run)
 
@@ -86,5 +88,11 @@ The dispatch is the same command for both; the planner never picks the backend.
 ## Process lessons
 
 - Measure a mechanism end to end before designing around it.
+- To judge a new backend's enforcement, run the forbidden-chores ticket twice: once with the forbidden list in the
+  prompt, once without. Only the second shows what the backend itself blocks.
+- Never edit Hermes `config.yaml` or create profiles for the user (Hermes refuses it anyway): print the exact
+  `hermes profile create` / `hermes -p <p> model` / `hermes config set` commands and let the user run them.
+- When the user asks for an "agnostic" option, list options in a table (model per role, planner steps, blocked while
+  running, build cost) and recommend one; they iterate on it before any build.
 - Before testing a workflow change, show the user the old vs new workflow side by side (steps, what is enforced,
   what is only caught afterwards); they want to understand it before the toy runs.

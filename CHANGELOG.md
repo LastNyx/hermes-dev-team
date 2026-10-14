@@ -5,6 +5,11 @@ mark an entry **action** when another machine must do something (re-run `link-sk
 
 Format: version, date, then one line per change, naming the file.
 
+## 0.10.1 - 2026-10-14
+
+- `docs/benchmarks.md` (new): all measured runs so far in one place (claude vs hermes backend, rejected fallbacks,
+  earlier spikes), with a note on reading the token columns. Add real-project `costs.py` tables there.
+
 ## 0.10.0 - 2026-10-14
 
 - `kit/run-worker.py`: **backend-agnostic workers.** `backend` = `auto` (default: claude when `claude auth status`

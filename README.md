@@ -18,6 +18,7 @@ actions; see [docs/design.md](docs/design.md). It has not yet been used on a rea
 - [LEARN.md](LEARN.md): a prompt to paste into Hermes on another machine so it installs and learns this repo.
 - [CHANGELOG.md](CHANGELOG.md): every skill, role, or launcher change; marks what to re-copy after `git pull`.
 - [docs/design.md](docs/design.md): decisions, measurements, and what was rejected.
+- [docs/benchmarks.md](docs/benchmarks.md): every measured run (time, calls, tokens, cost) per backend and model.
 
 ## Requirements
 
