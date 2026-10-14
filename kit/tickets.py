@@ -39,15 +39,40 @@ def field(text, key):
     return m.group(1).split("  #")[0].strip().strip("`").strip()
 
 
+def ticket_id(s):
+    """Normalised ticket id: digits plus an optional letter suffix, leading zeros dropped ('05b' -> '5b').
+
+    A lettered ticket (02b) is its own ticket, not 02. Fix tickets (05-fix-x) share the id of the ticket they fix.
+    """
+    m = re.match(r"0*(\d+)([a-z]?)", s, re.I)
+    return (m.group(1) + m.group(2).lower()) if m else s
+
+
 def number(path):
-    m = re.match(r"(\d+)", path.name)
-    return m.group(1) if m else path.stem
+    return ticket_id(path.name)
+
+
+def is_fix(path):
+    return "-fix-" in path.name
 
 
 def blockers(value):
     if not value or value.lower().startswith("none"):
         return []
-    return re.findall(r"\d+", value)
+    return [ticket_id(b) for b in re.findall(r"\b\d+[a-z]?\b", value, re.I)]
+
+
+def blocker_done(b, waiting, groups):
+    """Blocker id b is done when its main ticket(s) are done and, for a ticket with another id, its fix tickets too.
+
+    A fix ticket blocked by its own id waits only for the main ticket (else two fixes of one ticket would wait on
+    each other)."""
+    group = groups.get(b) or []
+    if not group:
+        return False
+    same = number(waiting) == b
+    need = [(t, f) for t, f in group if t != waiting and not (same and is_fix(t))]
+    return all(f.get("Status") == "done" for _, f in need)
 
 
 def find_feature(arg):
@@ -131,14 +156,13 @@ def main():
             missing.append("Verify (a planner check, or None)")
         if f["Seam"] and f["Seam"].lower() == "none":
             missing.append("Seam=None")
-        by_num[number(t)] = f
+        by_num.setdefault(number(t), []).append((t, f))
         rows.append((t, f, missing))
         problems += bool(missing)
     if a.next:
-        ready = [t for t, f, m in rows if f["Status"] == "todo" and not m
-                 and all((by_num.get(b) or {}).get("Status") == "done" for b in blockers(f["Blocked by"]))]
-        for t in ready:
-            f = by_num[number(t)]
+        ready = [(t, f) for t, f, m in rows if f["Status"] == "todo" and not m
+                 and all(blocker_done(b, t, by_num) for b in blockers(f["Blocked by"]))]
+        for t, f in ready:
             print(f"{t.name}\trepo={f['Repo'] or '-'}\tbranch={f['Branch']}")
         if not ready:
             print("nothing ready (all done, in progress, blocked, or waiting on blockers)")
@@ -146,7 +170,8 @@ def main():
     print(f"{'ticket':<34}{'repo':<18}{'status':<12}{'blocked by':<12}seam | test command | verify")
     for t, f, missing in rows:
         print(f"{t.name[:33]:<34}{(f['Repo'] or '-')[:17]:<18}{(f['Status'] or '?'):<12}"
-              f"{','.join(blockers(f['Blocked by'])) or '-':<12}{f['Seam'] or '?'} | {f['Test command'] or '?'}"
+              f"{','.join(blockers(f['Blocked by'])) or '-':<12}{(f['Seam'] or '?').replace('`', '')}"
+              f" | {f['Test command'] or '?'}"
               f" | {f['Verify'] or '-'}")
         if missing:
             print(f"    FIX: {', '.join(missing)}")

@@ -5,6 +5,17 @@ mark an entry **action** when another machine must do something (re-run `link-sk
 
 Format: version, date, then one line per change, naming the file.
 
+## 0.9.2 - 2026-10-14
+
+- `kit/tickets.py`: ticket ids keep their letter suffix (`02b` is its own ticket, not `02`); leading zeros are dropped
+  (`05` = `5`). A blocker id is done when every ticket with that id is done, its fix tickets included; a fix ticket
+  blocked by its own id waits only for the main ticket. Before, `05`, `05b`, `05c` and `05-fix-*` collapsed to one
+  entry and the last one sorted decided `--next`. Seam column prints without backticks.
+- `kit/roles/reviewer.md`: batch `tickets:` match the id exactly (`05` = `05-*` and `05-fix-*`, never `05b-*`).
+- Measured on Windows (the 0.9.1 **action**, toy two-repo workspace, Haiku dev): ticket `Repo: api` refused from
+  `ui`; from `api` PASS in 31 s, read the ticket and wrote dev-notes in the workspace scratch through the
+  `//c/...` rules, committed in its repo; writing `../ui/HACK.md` and reading the workspace root were denied.
+
 ## 0.9.1 - 2026-10-14
 
 - `kit/run-worker.py`: absolute permission rules for a workspace scratch folder and glossary are now correct on
