@@ -161,16 +161,20 @@ def short(n):
     return f"{n / 1e6:.1f}M" if n >= 1e6 else f"{round(n / 1e3)}k" if n >= 1e3 else str(n)
 
 
-def stream_worker(cmd, progress_path, env=None):
+def stream_worker(cmd, progress_path, env=None, lock=None):
     """Run claude or hermes with stream-json, print + log one line per tool call and per denial; return the final result event.
 
     The final `result` event carries the same fields as --output-format json (subtype, result, num_turns, usage,
     total_cost_usd, permission_denials). Progress lines go to stdout (flushed, so a background heartbeat sees them)
     and to progress_path; the RESULT line printed by main() stays the last line.
+    lock: dict written to the worker lock file once the worker's pid is known (scratch.py stop kills that pid).
     """
     t0, final, names = time.time(), None, {}
+    # own session on POSIX, so `scratch.py stop` can kill the worker's group without touching the planner's
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                            encoding="utf-8", errors="replace", env=env)
+                            encoding="utf-8", errors="replace", env=env, start_new_session=(os.name != "nt"))
+    if lock is not None:
+        write_lock(lock, worker_pid=proc.pid)
     with open(progress_path, "w", encoding="utf-8") as log:
         def emit(msg):
             s = f"  [{round(time.time() - t0):>4}s] {msg}"
@@ -218,6 +222,22 @@ def stream_worker(cmd, progress_path, env=None):
     if final is not None:
         final.setdefault("_exit", proc.returncode)
     return final or {"subtype": "unparsed", "result": err.strip()[-300:], "_exit": proc.returncode}
+
+
+def write_lock(lock, **upd):
+    """Write the worker lock (see teamcfg.py). Keeps a `stop_requested` that scratch.py stop wrote meanwhile."""
+    lock.update(upd)
+    p = pathlib.Path(lock["path"])
+    old, _ = teamcfg.read_lock(p.parent.parent)
+    if old and old.get("stop_requested") and old.get("launcher_pid") == lock["launcher_pid"]:
+        lock["stop_requested"] = old["stop_requested"]
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps({k: v for k, v in lock.items() if k != "path"}), encoding="utf-8")
+
+
+def stop_requested(lock):
+    d, _ = teamcfg.read_lock(pathlib.Path(lock["path"]).parent.parent)
+    return bool(d and d.get("stop_requested"))
 
 
 def claude_ready():
@@ -318,7 +338,7 @@ def report(st, verdict, turns, secs, usage, cost, denials, out_path, backend):
     line = (f"{st['stamp']}\t{st['role']}\t{st['model']}\t{verdict}\tturns={turns}\t{secs}s\t"
             f"out={tout}\tlist$={cost}\tdenials={len(denials)}\t{rel(out_path)}\t"
             f"feature={st['feature']}\ttest={st['test_cmd'] or '-'}\tin={tin}\tcw={tcw}\tcr={tcr}\trepo={st['repo_name']}"
-            f"\tbackend={backend}{enforce}")
+            f"\tbackend={backend}{enforce}\tticket={st.get('ticket') or '-'}")
     with open(pathlib.Path(st["scratch"]) / "runs.log", "a", encoding="utf-8") as f:
         f.write(line + "\n")
     tag = " backend=hermes enforce=prompt-only" if backend == "hermes" else ""
@@ -399,6 +419,7 @@ def main():
         if a.role == "dev":
             perms["allow"] += [f"Read({perm_path(scratch)}/**)", f"Edit({perm_path(scratch)}/**)"]
             perms["deny"].append(f"Edit({perm_path(scratch)}/runs/**)")
+            perms["deny"].append(f"Edit({perm_path(scratch)}/.git/**)")   # the scratch repo's own git
         prompt += (f"\nThe scratch folder is {scratch.as_posix()}: wherever your instructions say `.scratch/`, use that"
                    " folder (absolute paths).")
     glossary = cfg.get("glossary")
@@ -428,7 +449,7 @@ def main():
     snap = snapshot(protected)
     st = {"role": a.role, "model": model, "test_cmd": test_cmd, "feature": feature, "repo_name": repo.name,
           "repo": repo.as_posix(), "scratch": scratch.as_posix(), "stamp": stamp, "protected": protected,
-          "snapshot": snap, "out_path": out_path.as_posix()}
+          "snapshot": snap, "out_path": out_path.as_posix(), "ticket": ticket.name if ticket else None}
     cut = f" rules={'+'.join(rules_used) or 'none'}"
     if rules_full > tc["rules_max_chars"]:
         cut += f"({round(rules_full / 1000)}k>cap)"
@@ -438,24 +459,45 @@ def main():
         env["PATH"] = os.pathsep.join(tc["path"] + [env.get("PATH", "")])
     progress_path = runs / f"{stamp}-{a.role}.progress.log"
 
-    if backend == "hermes":
-        return run_hermes(st, role_prompt, prompt, runs, cut, cfg, hprofile, effort, turns, env, progress_path,
-                          snap, protected, out_path)
+    # One worker at a time, across planner sessions too: a live lock refuses; a stale one (launcher gone) is replaced.
+    held, alive = teamcfg.read_lock(scratch)
+    if alive:
+        print(f"RESULT {a.role} ERROR worker already running: {held.get('role')} {held.get('ticket') or '-'} "
+              f"since {held.get('stamp')} (wait for its exit, or `scratch.py stop`)"); return 2
+    lock = {"path": str(teamcfg.lock_path(scratch)), "launcher_pid": os.getpid(), "role": a.role,
+            "ticket": st["ticket"], "feature": feature, "repo": repo.name, "stamp": stamp}
+    write_lock(lock)
+    try:
+        if backend == "hermes":
+            return run_hermes(st, role_prompt, prompt, runs, cut, cfg, hprofile, effort, turns, env, progress_path,
+                              snap, protected, out_path, lock)
+        return run_claude(st, a.role, settings, role_prompt, prompt, agents_path, model, turns, effort, cut, env,
+                          progress_path, snap, protected, out_path, lock)
+    finally:
+        try:
+            pathlib.Path(lock["path"]).unlink()
+        except OSError:
+            pass
 
-    agents_path.write_text(json.dumps({a.role: {"description": f"{a.role} worker", "prompt": role_prompt}}),
+
+def run_claude(st, role, settings, role_prompt, prompt, agents_path, model, turns, effort, cut, env, progress_path,
+               snap, protected, out_path, lock):
+    agents_path.write_text(json.dumps({role: {"description": f"{role} worker", "prompt": role_prompt}}),
                            encoding="utf-8")
-    cmd = ["claude", "-p", prompt, "--agents", str(agents_path), "--agent", a.role, "--tools", TOOLS,
+    cmd = ["claude", "-p", prompt, "--agents", str(agents_path), "--agent", role, "--tools", TOOLS,
            "--settings", json.dumps(settings), "--setting-sources", "", "--model", model,
            "--max-turns", str(turns), "--output-format", "stream-json", "--verbose", "--no-session-persistence"]
     if effort:
         cmd += ["--effort", effort]
-    print(f"START {a.role} claude:{model}{'/' + effort if effort else ''} max-turns={turns}{cut} | "
+    print(f"START {role} claude:{model}{'/' + effort if effort else ''} max-turns={turns}{cut} | "
           f"progress: {rel(progress_path)}", flush=True)
     t0 = time.time()
-    d = stream_worker(cmd, progress_path, env)
+    d = stream_worker(cmd, progress_path, env, lock)
     secs = round(time.time() - t0)
     out_path.write_text(json.dumps(d), encoding="utf-8")
     verdict = verdict_of(d.get("result"), d.get("subtype"), guards_after(snap, protected))
+    if stop_requested(lock):
+        verdict = f"FAIL force-stopped | {verdict}"
     u = d.get("usage") or {}
     # in = uncached input only; cw/cr = cache write/read. Total prompt size is in+cw+cr (cr is usually the bulk).
     usage = tuple(u.get(k) for k in ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens",
@@ -465,7 +507,7 @@ def main():
 
 
 def run_hermes(st, role_prompt, prompt, runs, cut, cfg, profile, effort, turns, env, progress_path, snap,
-               protected, out_path):
+               protected, out_path, lock):
     """Fallback backend: one headless `hermes -p <profile> chat` run, judged exactly like a claude run.
 
     measured (Sonnet 5.5, anthropic provider, toy ticket): 28 s, 8 API calls, sessions stay in the worker profile.
@@ -488,7 +530,7 @@ def run_hermes(st, role_prompt, prompt, runs, cut, cfg, profile, effort, turns, 
     print(f"START {st['role']} hermes:{hmodel or profile + '-default'}{'/' + effort if effort else ''} "
           f"max-turns={turns}{cut} enforce=prompt-only | progress: {rel(progress_path)}", flush=True)
     t0 = time.time()
-    d = stream_worker(cmd, progress_path, env)
+    d = stream_worker(cmd, progress_path, env, lock)
     secs = round(time.time() - t0)
     out_path.write_text(json.dumps(d), encoding="utf-8")
     st["model"] = hmodel or f"{profile}-default"
@@ -496,6 +538,8 @@ def run_hermes(st, role_prompt, prompt, runs, cut, cfg, profile, effort, turns, 
     verdict = verdict_of(d.get("text") if "text" in d else d.get("result"), subtype, guards_after(snap, protected))
     if verdict.startswith("PASS") and d.get("_exit") != 0:     # measured: turn cap = exit 1, model writes its own line
         verdict = f"FAIL hermes exit={d.get('_exit')} | {verdict}"
+    if stop_requested(lock):
+        verdict = f"FAIL force-stopped | {verdict}"
     t = d.get("tokens") or {}
     usage = (t.get("input"), t.get("cache_write"), t.get("cache_read"), t.get("output"))
     return report(st, verdict, "-", secs, usage, None, [], out_path, "hermes")

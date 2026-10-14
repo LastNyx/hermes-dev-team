@@ -20,7 +20,8 @@
   "deny": [
    "Edit(./docs/adr/**)",
    "Edit(./docs/dev-notes.md)",
-   "Edit(./.scratch/runs/**)"
+   "Edit(./.scratch/runs/**)",
+   "Edit(./.scratch/.git/**)"
   ]
  },
  "includeCoAuthoredBy": false,

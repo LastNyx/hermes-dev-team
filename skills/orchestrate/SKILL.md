@@ -1,7 +1,7 @@
 ---
 name: orchestrate
 description: Run dev, reviewer, docs workers on tickets; verify results.
-version: 0.4.1
+version: 0.5.0
 author: hermes-dev-team contributors
 license: MIT
 platforms: [linux, macos, windows]
@@ -60,9 +60,28 @@ repo; never commit a workspace file into a repo.
 
 ## Procedure
 
-1. **Branch.** Create the feature branch from main (multi-repo: in each repo the feature touches). With an in-repo scratch folder, add `.scratch/` to `.git/info/exclude`. Commit the glossary and ADRs on the branch as `docs: context` (a workspace-level glossary is not committed). The launcher refuses to run on main or master.
+0. **Resume** (every time this skill starts, also in a fresh session and after a machine switch, before anything
+   else): `python KIT/scratch.py resume [<feature>]`. It removes a stale worker lock, commits leftover scratch
+   changes, pulls the scratch repo and each feature branch fast-forward only (checking the branch out if needed), and
+   prints per feature: Status counts, every `in-progress` ticket with its last `runs.log` verdict and an action, the
+   `decisions.md` lines, and `batches.md`. Show the user that report, then act on it:
+   - `VERIFY` (a commit ending with `(<ticket file>)` exists): do step 6 for it.
+   - `REDISPATCH` (no commit, tree clean): set nothing, go to step 4 with that ticket.
+   - `ASK` (no commit, dirty tree) or `RESUME STOP`: show the user the lines and wait. Never reset, stash, merge,
+     rebase or commit worker code to get past it. A `DIVERGED` line means both machines committed: show both sides.
+   - `worker running`: wait for its exit notice (or the user's force-stop).
+   Read `decisions.md` before anything else and follow it: it holds what the user decided in chat, which no other
+   file shows. There is no handoff or summary file; the state is the tickets, `batches.md`, reviews, `runs.log`,
+   `decisions.md` and git.
+1. **Branch.** Create the feature branch from main (multi-repo: in each repo the feature touches). Make the scratch folder its own git repo once per project: `python KIT/scratch.py init` (it also adds an in-repo
+   `.scratch/` to `.git/info/exclude`; a workspace scratch folder works the same). To carry work between machines
+   the user creates a PRIVATE remote and gives you the URL: `scratch.py init --remote <url>`. Never create a remote
+   yourself. On the other machine: `scratch.py init --clone <url>`. Commit the glossary and ADRs on the branch as `docs: context` (a workspace-level glossary is not committed). The launcher refuses to run on main or master.
 2. **Make tickets dispatchable.** Run `python KIT/tickets.py <feature> --add-header` (dry run, then `--apply`): it moves flat `NN-*.md` files into `issues/` and inserts the header after the title, keeping the body and Matt's `Blocked by`; then fill the placeholders (the header is this skill's `templates/ticket-header.md.template`). If it prints `STOP`, a ticket lacks Matt's `**Blocked by:**` and `**Status:**` lines: tell the user that `to-tickets` has changed upstream and `tickets.py` needs updating; do not edit tickets by hand to get past it. `python KIT/tickets.py <feature>` checks every ticket and prints the approval table (repo, status, blockers, Seam, Test command, Verify); exit 0 means dispatchable. A worker has no web and cannot ask: put every fact it needs in the ticket. **Test command vs Verify.** `Test command` is what the dev may run: it must be cheap and safe with no running services and no database writes (typecheck, lint, unit tests, a headless browser test that starts its own server). A check that needs a running server, a database, or the user's say-so goes on the `Verify:` line instead (else `None`): you run it yourself after the batch's review passes, ask first if a project rule requires it, and write the outcome under the ticket's `## Result`. Show the user the Seam, Test command and Verify per ticket in one list (the `tickets.py` table), plus the proposed **review batches** (full lane): each batch is one milestone, a set of tickets that delivers one usable capability, at most 4 tickets, in dependency order. They approve both before step 3. Record the batches in `.scratch/<feature>/batches.md` (one line per batch: `<b>: NN,NN,... base: <sha or blank>`). The launcher reads only the plain `Test command:` line.
 3. **Pick** the next `todo` ticket whose `Blocked by` tickets are all `done` (`python KIT/tickets.py <feature> --next` lists them). Set it `in-progress` yourself; workers never change a ticket's Status.
+   **After every Status change** (here and in steps 6 and 8): `python KIT/scratch.py commit "<NN> <status>"`
+   (local only, no push). **Whenever the user decides something in chat** that the files cannot show (skip a
+   Verify, use approach B, ask before batch 2): `python KIT/scratch.py decide <feature> "<one line>"` at once.
 4. **Dispatch dev** with `terminal(background=true, heartbeat=120)`, cwd = the repo (multi-repo: the ticket's `Repo`):
    `python -u KIT/run-worker.py dev "ticket: .scratch/<feature>/issues/NN-slug.md"` (workspace scratch: the
    absolute path or `../.scratch/...`; the launcher grants the worker that folder and nothing else outside the repo)
@@ -87,8 +106,23 @@ repo; never commit a workspace file into a repo.
    Before dispatching a fix ticket, check its `Seam`: a dev with `Seam: None` FAILs in seconds without writing code. For a refactor-only fix, name the function or file touched and add "refactor only, existing tests are the check".
 9. **Docs** (full lane, all `done`): `python KIT/run-worker.py docs "feature: .scratch/<feature>"`. Read `drift.md` and tell the user the items.
    The docs worker has 25 turns; a job that edits more than three files still hits the cap after editing but before committing. Split it, or hand it a facts file (`.scratch/<feature>/docs-facts.md`) with only planner-verified facts, since it has no device or web.
-10. **Merge.** Tell the user the branch is ready (multi-repo: every repo's branch, and the merge order). The user runs `git merge --no-ff`. Never merge, delete a branch, or push.
+10. **Merge.** Tell the user the branch is ready (multi-repo: every repo's branch, and the merge order). The user runs `git merge --no-ff`. Never merge or delete a branch; never push except on "switching" (below).
 11. **Lessons.** Show the user each line of `.scratch/dev-notes.md`. With their say-so, add the approved project facts to `docs/dev-notes.md` on main (60 lines or fewer), commit as `docs: dev notes`, and clear the scratch file. A lesson that helps every project goes into the team repo's `kit/roles/*.md` only after the user has read it.
+
+## Switching machines and force-stop
+
+- **"switching"** (the user is moving to another machine): `python KIT/scratch.py switch`. This is the ONLY push you
+  ever make: the scratch repo plus the checked-out feature branch of each repo, plain `git push` (never `--force`,
+  never main). It refuses while a worker runs (wait for the exit notice, or force-stop first), and refuses when a
+  product tree has uncommitted changes: show the user `git status --short` and let them discard the changes or commit
+  a WIP themselves; never commit worker code yourself. `WARN ... no remote` means that part stays on this machine:
+  tell the user. A rejected push means the other machine pushed meanwhile; run step 0 and show the divergence.
+- **Force-stop** (the user asks to stop a running worker): `python KIT/scratch.py stop`. It kills the worker's process
+  tree, waits for the launcher's `RESULT ... FAIL force-stopped` line, leaves the ticket `in-progress`, and commits a
+  `force-stopped` line to `decisions.md`. Do not change the ticket's Status: the next step 0 decides (redispatch on a
+  clean tree, ask on a dirty one). Never `process kill` the background terminal instead: that skips the log line.
+- The launcher keeps `<scratch>/runs/worker.lock` while a worker runs and refuses a second dispatch (`ERROR worker
+  already running`), also from another planner session. A lock left by a crashed launcher is removed by step 0.
 
 ## Cost log
 
@@ -111,7 +145,11 @@ can still be updated from upstream.
 
 ## Pitfalls
 
-- Never run two workers at once; the serial chain keeps one branch and one tree.
+- Never run two workers at once; the serial chain keeps one branch and one tree. The launcher's worker lock enforces it.
+- An untracked `__pycache__/` (or any build output) counts as a dirty tree: step 0 then says ASK and "switching" stops.
+  If the project's `.gitignore` lacks it, ask the user to add it.
+- The dev's commit subject ends with `(<ticket file name>)`; step 0 finds a finished ticket by it. A fix you commit
+  yourself for a ticket must not reuse that ending, or step 0 reads it as the dev's commit.
 - **Hermes backend:** workers run as `hermes -p <profile> chat … --source tool`, so their sessions stay in the worker profile, not the user's chat list. They are prompt-only: a write outside the repo, or a checkout that switches back, is not caught. Their `$` in `costs.py` is unknown (tokens are real). The first run on a new profile is slow because Hermes installs its dependencies once.
 - `FAIL guard:pushed:<remote>` (both backends): the remote's refs changed during the run. Nothing an agent pushes is ever kept; tell the user, who decides what to delete on the remote.
 - A ticket that needs a new dependency or a test-config change FAILs with `guard:test-config-changed` or a denial: the dev may not edit `package.json`, lockfiles, `jest`/`vitest`/`tsconfig` files or `.team.json`, because the allowed test command would run whatever they say. Make that change yourself, with the user's yes, commit it, then re-dispatch.

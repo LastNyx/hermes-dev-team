@@ -12,6 +12,7 @@ actions; see [docs/design.md](docs/design.md). It has not yet been used on a rea
 
 - [TEAM.md](TEAM.md): the roles on one page.
 - `kit/run-worker.py`: the launcher. `kit/roles/<role>.md` + `<role>.json`: each worker's prompt and permissions.
+- `kit/scratch.py`: resume in a new session or on another machine, force-stop a worker, switch machines.
 - `skills/`: two Hermes skills for the planner (orchestrate, claude-p-role-workers).
 - Planning uses [Matt Pocock's skills](https://github.com/mattpocock/skills) as-is, installed from the Hermes skill hub
   (not vendored, so they keep updating): grill-with-docs, grilling, domain-modeling, to-tickets.
@@ -19,6 +20,7 @@ actions; see [docs/design.md](docs/design.md). It has not yet been used on a rea
 - [CHANGELOG.md](CHANGELOG.md): every skill, role, or launcher change; marks what to re-copy after `git pull`.
 - [docs/design.md](docs/design.md): decisions, measurements, and what was rejected.
 - [docs/benchmarks.md](docs/benchmarks.md): every measured run (time, calls, tokens, cost) per backend and model.
+- [docs/testing.md](docs/testing.md) + `tests/`: the repeatable tests (resume, force-stop, switching), what they check, results.
 
 ## Requirements
 
@@ -98,6 +100,27 @@ Every run appends to `.scratch/runs.log`; `python KIT/costs.py --by-role` totals
 minutes, input / cache write / cache read / output tokens, cache hit %, list price, denials (`--backfill` adds the
 token columns to runs logged before 0.8.0).
 Commits never get a Co-Authored-By trailer.
+
+## Resume and switching machines
+
+There is no handoff file. The scratch folder (tickets, `batches.md`, reviews, `runs.log`, and one `decisions.md` per
+feature for what you decided in chat) is its own small git repo, separate from the product repo, and the planner
+rebuilds the state from it and git every time it starts (`orchestrate` step 0).
+
+```bash
+python KIT/scratch.py init --remote <private-url>   # once per project; you create the private remote
+python KIT/scratch.py resume                        # step 0, run by the planner: ff-only pull + state report
+python KIT/scratch.py switch                        # you say "switching": push scratch + feature branch(es)
+python KIT/scratch.py init --clone <private-url>    # first time on the other machine
+python KIT/scratch.py stop                          # force-stop the running worker
+```
+
+- `resume` sorts each `in-progress` ticket: a dev commit for it exists -> verify; no commit and a clean tree ->
+  redispatch; a dirty tree -> ask you. It never resets, stashes, merges or rebases; if both machines committed, it
+  stops and shows both sides.
+- `switch` is the only push an agent makes: never main, never `--force`, never while a worker runs, never with
+  uncommitted product changes (you discard them or commit a WIP yourself).
+- `runs/` (result JSON, progress logs) is not carried; `runs.log` is.
 
 ## Backends
 

@@ -5,6 +5,29 @@ mark an entry **action** when another machine must do something (re-run `link-sk
 
 Format: version, date, then one line per change, naming the file.
 
+## 0.11.0 - 2026-10-14
+
+- `kit/scratch.py` (new): `init` (scratch folder becomes its own git repo, `runs/` ignored, product repo excludes it;
+  `--remote`, `--clone`), `resume` (orchestrate step 0), `commit`, `decide` (one line in `<feature>/decisions.md`),
+  `stop` (force-stop the running worker), `switch` (push scratch + feature branches). No handoff file.
+- `kit/run-worker.py`: worker lock `<scratch>/runs/worker.lock` (second dispatch refused with `ERROR worker already
+  running`; a stale lock is replaced); `scratch.py stop` makes the RESULT `FAIL force-stopped`; runs.log lines gain
+  `ticket=<file>`; workers start in their own process group on POSIX; a workspace scratch's `.git` is denied.
+- `kit/roles/{dev,reviewer,docs}.json`: deny `Edit(./.scratch/.git/**)`.
+- `kit/teamcfg.py`: `repos` (workspace repo paths), `pid_alive` (no signal: `os.kill(pid, 0)` kills on Windows),
+  `read_lock`, `kill_tree`.
+- `skills/orchestrate/SKILL.md` 0.5.0: step 0 Resume, scratch repo in step 1, commit after every Status change,
+  `decide` for chat decisions, "Switching machines and force-stop" section; the planner pushes only on "switching".
+- `docs/design.md`: decisions 25-27. README: "Resume and switching machines".
+- `tests/resume_e2e.py` (2 real dev runs, 33 checks) and `tests/resume_workspace.py` (no model, 6 checks), run in a
+  temp folder with local bare remotes; `docs/testing.md` (new) lists what they check, results, and what is not covered.
+- Measured (Windows, toy repo, two clones + bare remotes as two machines, real Sonnet dev runs): 33/33 checks: dev
+  PASS 26 s; second dispatch, switch and a resume during a run all refused/waited; stop -> `FAIL force-stopped`,
+  ticket stayed in-progress, decision committed; switch stopped on a dirty tree; machine B resumed with REDISPATCH,
+  VERIFY for a committed ticket, decisions shown; diverged scratch -> STOP, no merge, push rejected not forced;
+  ff pull on a third clone. Workspace layout (2 repos, no model): 6/6. Re-run from `tests/`: 33/33 and 6/6.
+- **action:** start a new planner session to load orchestrate 0.5.0. Existing projects: run `scratch.py init` once.
+
 ## 0.10.3 - 2026-10-14
 
 - `README.md`: new "Project shapes" section (single repo, monorepo, workspace) with an example `.team.json` each.

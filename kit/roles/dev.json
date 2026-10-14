@@ -22,7 +22,8 @@
    "Edit(**/GLOSSARY.md)",
    "Edit(./docs/adr/**)",
    "Edit(./docs/dev-notes.md)",
-   "Edit(./.team.json)"
+   "Edit(./.team.json)",
+   "Edit(./.scratch/.git/**)"
   ]
  },
  "includeCoAuthoredBy": false,

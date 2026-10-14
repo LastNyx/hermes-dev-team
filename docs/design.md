@@ -9,9 +9,11 @@ repo with Claude Code 2.1.296.
   dispatches workers, verifies, and never writes product code.
 - **Workers** = headless `claude -p` runs started by `kit/run-worker.py`: dev (one ticket), reviewer (one feature),
   docs (after review). Serial: one worker at a time, one branch, no worktrees.
-- **Channel** = files in `.scratch/<feature>/` (untracked) and the git branch. The planner reads one `RESULT` line
+- **Channel** = files in `.scratch/<feature>/` (untracked by the product repo; their own small git repo, decision 25)
+  and the git branch. The planner reads one `RESULT` line
   per run and a few git commands, never a transcript.
-- **The user merges** (`git merge --no-ff`). No agent merges, pushes, or deletes branches.
+- **The user merges** (`git merge --no-ff`). No agent merges or deletes branches. Workers never push; the planner
+  pushes only when the user says "switching" (decision 26).
 
 ## Decisions
 
@@ -40,6 +42,9 @@ repo with Claude Code 2.1.296.
 | 22 | Workers are backend-agnostic: claude by default, a headless Hermes worker profile as the fallback (`backend` auto/claude/hermes, per role) | Not every machine has Claude. Measured on Sonnet 5.5 (anthropic provider): 28 s vs 27 s for `claude -p` on the same ticket, about a quarter of the cached prompt tokens, sessions kept out of the user's chat list. The first Hermes spike (92 s) was slow because of the claude-subscription plugin, not Hermes. |
 | 23 | Hermes workers are labelled `enforce=prompt-only` and judged by the same after-run guards | `-t file,terminal` blocks nothing inside the shell and headless approvals were off. With the forbidden list in the prompt the worker refused all 4 forbidden chores; without it, it checked out main and back, wrote outside the repo, edited package.json and pushed. |
 | 24 | New guard for both backends: `git ls-remote` per remote before and after, `FAIL guard:pushed:<remote>` on any change | A push was the one forbidden action no earlier guard caught. Measured: a push during a Claude run turned a worker PASS into `FAIL guard:pushed:origin`. An unreadable remote (offline, no auth) is skipped, not failed. |
+| 25 | No handoff file: a new planner session (or another machine) rebuilds state from tickets, `batches.md`, reviews, `runs.log`, git and a `decisions.md` per feature; the scratch folder is its own git repo | A summary goes stale (the old handoff note grew to 104 lines, partly marked obsolete). The files are the state already; only chat-made decisions were missing, so they get one line each in `decisions.md`, written when made. The scratch repo lets the state travel without putting agent files on the product branch. `scratch.py resume` reads an `in-progress` ticket three ways: a commit ending `(<ticket file>)` = verify, none + clean tree = redispatch, dirty tree = ask (never reset or stash). Measured with two clones as two machines: 33/33 checks, real dev runs. |
+| 26 | The planner pushes only on "switching": the scratch repo and the feature branch(es), never main, never `--force`, never while a worker runs, never with uncommitted product changes. Workers never push (the `pushed` guard stays) | The user moves between machines mid-feature. Routine per-ticket pushes were rejected (not wanted). Divergence is never merged: `resume` pulls fast-forward only and stops with both sides shown; a rejected push is reported, not forced. Measured: diverged scratch -> `RESUME STOP`, no merge commit; the push rejected, not forced. |
+| 27 | A worker lock (`<scratch>/runs/worker.lock`) holds the launcher and worker pids; `scratch.py stop` kills the worker tree and logs `force-stopped` | "One worker at a time" was a prompt rule only; a second planner session could break it. The lock refuses a second dispatch and a switch mid-run. Measured: second dispatch refused, switch refused, stop turned the run into `FAIL force-stopped` in runs.log, ticket stayed `in-progress`, and the next resume on the other machine said REDISPATCH. |
 | 21 | `Test command` must be cheap and safe; anything needing a server, DB, or the user's say-so is a planner-run `Verify:` | A worker cannot ask, and a project rule may forbid DB operations without the user's yes in that turn. |
 
 ## Measured (end to end, toy repo)
@@ -61,6 +66,10 @@ repo with Claude Code 2.1.296.
   only the prompt rules stop them. Review before merge is the defence, as for the test command.
 - Amend is detected after the fact, not prevented; recovery is `git reflog`.
 - Prices in the log are list price; a subscription seat is billed differently.
+- `resume` matches a finished ticket by the dev's commit subject ending `(<ticket file>)`. A hand commit with that
+  ending, or a dev that changed the format, misleads it (VERIFY when the dev never finished; step 6 still checks).
+- The scratch repo holds tickets and `runs.log` only; `runs/` (result JSON, progress logs) stays on the machine
+  that ran the worker, so `costs.py --backfill` cannot fill old lines from the other machine.
 
 ## Rejected
 
@@ -72,3 +81,7 @@ repo with Claude Code 2.1.296.
   a headless run in a worker profile with `-m` per role.
 - **String-matching PreToolUse hooks:** bypassed in the first test.
 - **Installer scripts:** a clone plus three copied skill folders is enough.
+- **A handoff/summary file for resume:** goes stale; state is rebuilt from the files plus `decisions.md`.
+- **Committing `.scratch/` on the feature branch:** puts agent files in the product history or needs stripping before
+  merge; a separate scratch repo does not.
+- **Routine pushes after every ticket:** pushes only on "switching".

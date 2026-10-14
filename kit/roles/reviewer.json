@@ -7,7 +7,7 @@
    "Bash(git status --short)", "Bash(git branch --show-current)",
    "Bash(git diff:*)", "Bash(git log:*)", "Bash(git show:*)", "Bash(git merge-base:*)"
   ],
-  "deny": ["Edit(./.scratch/runs/**)"]
+  "deny": ["Edit(./.scratch/runs/**)", "Edit(./.scratch/.git/**)"]
  },
  "includeCoAuthoredBy": false,
  "attribution": {"commit": "", "pr": ""}
