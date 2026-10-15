@@ -5,6 +5,15 @@ mark an entry **action** when another machine must do something (re-run `link-sk
 
 Format: version, date, then one line per change, naming the file.
 
+## 0.12.2 - 2026-10-15
+
+- `skills/orchestrate` 0.6.1, step 2: tickets never ask the dev to delete a file (its allow-list has no `rm` or
+  `git rm`); the planner deletes and commits it before dispatch on the user's yes, or after the ticket via `Verify:`.
+- `skills/orchestrate` step 5: a FAIL that leaves uncommitted work is not re-dispatched (the dev refuses a dirty
+  tree). Show the user the diff; they commit or discard it, the planner commits only on their explicit yes, then step 6.
+- `kit/tickets.py`: `WARN asks to delete?` under a todo or in-progress ticket whose body asks for a deletion (warning
+  only, exit code unchanged).
+
 ## 0.12.1 - 2026-10-15
 
 - `kit/roles/docs.md`: updates every changelog the project rules name (file, language, audience), else the plain

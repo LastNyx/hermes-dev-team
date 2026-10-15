@@ -1,7 +1,7 @@
 ---
 name: orchestrate
 description: Run dev, reviewer, docs workers on tickets; verify results.
-version: 0.6.0
+version: 0.6.1
 author: hermes-dev-team contributors
 license: MIT
 platforms: [linux, macos, windows]
@@ -85,7 +85,7 @@ folder, even for one repo) and change nothing the team sees except the feature's
    - `VERIFY` (a commit ending with `(<ticket file>)` exists): do step 6 for it.
    - `REDISPATCH` (no commit, tree clean): set nothing, go to step 4 with that ticket.
    - `ASK` (no commit, dirty tree) or `RESUME STOP`: show the user the lines and wait. Never reset, stash, merge,
-     rebase or commit worker code to get past it. A `DIVERGED` line means both machines committed: show both sides.
+     rebase or commit worker code to get past it (the one exception: step 5's commit on the user's explicit yes). A `DIVERGED` line means both machines committed: show both sides.
    - `worker running`: wait for its exit notice (or the user's force-stop).
    Read `decisions.md` before anything else and follow it: it holds what the user decided in chat, which no other
    file shows. There is no handoff or summary file; the state is the tickets, `batches.md`, reviews, `runs.log`,
@@ -95,6 +95,11 @@ folder, even for one repo) and change nothing the team sees except the feature's
    the user creates a PRIVATE remote and gives you the URL: `scratch.py init --remote <url>`. Never create a remote
    yourself. On the other machine: `scratch.py init --clone <url>`. Commit the glossary and ADRs on the branch as `docs: context` (a workspace-level glossary is not committed; shared repo: keep them in the scratch folder, never commit them). The launcher refuses to run on main or master.
 2. **Make tickets dispatchable.** Run `python KIT/tickets.py <feature> --add-header` (dry run, then `--apply`): it moves flat `NN-*.md` files into `issues/` and inserts the header after the title, keeping the body and Matt's `Blocked by`; then fill the placeholders (the header is this skill's `templates/ticket-header.md.template`). If it prints `STOP`, a ticket lacks Matt's `**Blocked by:**` and `**Status:**` lines: tell the user that `to-tickets` has changed upstream and `tickets.py` needs updating; do not edit tickets by hand to get past it. `python KIT/tickets.py <feature>` checks every ticket and prints the approval table (repo, status, blockers, Seam, Test command, Verify); exit 0 means dispatchable. A worker has no web and cannot ask: put every fact it needs in the ticket. **Test command vs Verify.** `Test command` is what the dev may run: it must be cheap and safe with no running services and no database writes (typecheck, lint, unit tests, a headless browser test that starts its own server). A check that needs a running server, a database, or the user's say-so goes on the `Verify:` line instead (else `None`): you run it yourself after the batch's review passes, ask first if a project rule requires it, and write the outcome under the ticket's `## Result`. Show the user the Seam, Test command and Verify per ticket in one list (the `tickets.py` table), plus the proposed **review batches** (full lane): each batch is one milestone, a set of tickets that delivers one usable capability, at most 4 tickets, in dependency order. They approve both before step 3. Record the batches in `.scratch/<feature>/batches.md` (one line per batch: `<b>: NN,NN,... base: <sha or blank>`). The launcher reads only the plain `Test command:` line.
+   **No deletions in tickets.** The dev's allow-list has no `rm` or `git rm`, so a ticket that tells it to delete a
+   file ends in `FAIL could not delete ...; work uncommitted` with a dirty tree (step 5). Before dispatch, either
+   delete the file yourself and commit it (`git rm <file>`, then `git commit`, both after the user's yes), or reword
+   the ticket so the dev leaves the file in place (unused, unimported) and add "planner deletes <file> after this
+   ticket" to the ticket's `Verify:` line. `tickets.py` prints `WARN ... asks to delete` for a body that says so.
 3. **Pick** the next `todo` ticket whose `Blocked by` tickets are all `done` (`python KIT/tickets.py <feature> --next` lists them). Set it `in-progress` yourself; workers never change a ticket's Status.
    **After every Status change** (here and in steps 6 and 8): `python KIT/scratch.py commit "<NN> <status>"`
    (local only, no push). **Whenever the user decides something in chat** that the files cannot show (skip a
@@ -111,7 +116,14 @@ folder, even for one repo) and change nothing the team sees except the feature's
    heartbeats). A heartbeat shows the worker's new tool-call lines: answer it in one short line with no tool calls
    (each one is a planner turn, so keep it cheap). Act only on the exit notice. Use the same dispatch for steps 8 and 9.
 5. **Read the one result line**: `RESULT dev PASS <sha> | ...` or `RESULT dev FAIL <reason> | ...`, with any denied calls listed under it. Exit 0 means PASS and the guards held (main unmoved, branch unchanged, no history rewrite, no protected file changed). Never trust a bare `claude` exit code: it is 0 even when a worker gives up. A RESULT with `backend=hermes enforce=prompt-only` means nothing blocked the worker while it ran, only the launcher's after-run checks: treat it like any PASS, but in step 6 also confirm `git status --short` is clean, and tell the user once per feature that these runs were prompt-only.
-6. **Verify** with 3 commands: `git log --stat -1`, the ticket's `Test command`, `git status --short`. On PASS set the ticket `review` (quick lane: `done`). On FAIL set it `blocked` and tell the user the reason line.
+   **FAIL that leaves uncommitted work** (the reason says `work uncommitted`, or `git status --short` is not clean
+   after a FAIL): never re-dispatch first; the dev's step 1 refuses a dirty tree, so it FAILs `dirty tree` in seconds.
+   Show the user `git status --short` and `git diff --stat` (the full `git diff` on request) with the reason line, and
+   let them choose: they commit it, or they discard it, then re-dispatch. You may run the commit only on their explicit
+   yes for that diff, with a subject that does not end in `(<ticket file name>)` (see Pitfalls), and finish what the
+   worker could not (e.g. the `git rm` it was denied) in the same commit. Then verify it as step 6 (on PASS of the
+   checks, set the ticket `review`, not `blocked`) and log the choice with `scratch.py decide`.
+6. **Verify** with 3 commands: `git log --stat -1`, the ticket's `Test command`, `git status --short`. On PASS set the ticket `review` (quick lane: `done`). On FAIL set it `blocked` and tell the user the reason line (a dirty tree after a FAIL: step 5 first).
 7. Repeat 3-6 until every ticket of the current batch is `review` (quick lane: until every ticket is `done`, then step 10).
 8. **Review the batch** (full lane), dispatched as in step 4:
    `python -u KIT/run-worker.py reviewer "feature: .scratch/<feature> batch: <b> tickets: NN,NN base: <sha> round: <n>"`

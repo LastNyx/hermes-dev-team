@@ -75,6 +75,25 @@ def blocker_done(b, waiting, groups):
     return all(f.get("Status") == "done" for _, f in need)
 
 
+DELETE_RE = re.compile(r"\b(delet(e|es|ing)|git rm|rm -\w+|remove (the |this |that )?(file|folder|directory)s?)\b"
+                       r"|\bremove\s+`[^`]+\.\w+`", re.I)
+
+
+def delete_hint(text):
+    """First body line that asks for a file deletion (the dev cannot run rm or git rm), else None.
+
+    Only a warning: "delete" also means a DELETE endpoint or a delete button. Reads the body only (from the first
+    `## ` section, so the header's comments do not count) and skips lines that name the planner ("planner deletes
+    <file> after this ticket") and the `## Result` section.
+    """
+    body = text.split("\n## ", 1)[1] if "\n## " in text else ""
+    body = re.split(r"^## Result", body, flags=re.M)[0]
+    for line in body.splitlines():
+        if DELETE_RE.search(line) and "planner" not in line.lower():
+            return line.strip()[:80]
+    return None
+
+
 def find_feature(arg):
     p = pathlib.Path(arg).expanduser()
     return p.resolve() if p.is_dir() else teamcfg.load()["scratch"] / arg
@@ -157,10 +176,10 @@ def main():
         if f["Seam"] and f["Seam"].lower() == "none":
             missing.append("Seam=None")
         by_num.setdefault(number(t), []).append((t, f))
-        rows.append((t, f, missing))
+        rows.append((t, f, missing, delete_hint(text) if f["Status"] in ("todo", "in-progress") else None))
         problems += bool(missing)
     if a.next:
-        ready = [(t, f) for t, f, m in rows if f["Status"] == "todo" and not m
+        ready = [(t, f) for t, f, m, _ in rows if f["Status"] == "todo" and not m
                  and all(blocker_done(b, t, by_num) for b in blockers(f["Blocked by"]))]
         for t, f in ready:
             print(f"{t.name}\trepo={f['Repo'] or '-'}\tbranch={f['Branch']}")
@@ -168,14 +187,16 @@ def main():
             print("nothing ready (all done, in progress, blocked, or waiting on blockers)")
         return 0
     print(f"{'ticket':<34}{'repo':<18}{'status':<12}{'blocked by':<12}seam | test command | verify")
-    for t, f, missing in rows:
+    for t, f, missing, deletes in rows:
         print(f"{t.name[:33]:<34}{(f['Repo'] or '-')[:17]:<18}{(f['Status'] or '?'):<12}"
               f"{','.join(blockers(f['Blocked by'])) or '-':<12}{(f['Seam'] or '?').replace('`', '')}"
               f" | {f['Test command'] or '?'}"
               f" | {f['Verify'] or '-'}")
         if missing:
             print(f"    FIX: {', '.join(missing)}")
-    unknown = sorted({b for _, f, _ in rows for b in blockers(f["Blocked by"]) if b not in by_num})
+        if deletes:
+            print(f"    WARN asks to delete? the dev cannot rm or git rm (orchestrate step 2): {deletes}")
+    unknown = sorted({b for _, f, _, _ in rows for b in blockers(f["Blocked by"]) if b not in by_num})
     if unknown:
         print(f"FIX: Blocked by names tickets that do not exist: {', '.join(unknown)}"); problems += 1
     print(f"{len(rows)} ticket(s), {problems} to fix")
