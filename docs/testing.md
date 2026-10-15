@@ -10,6 +10,7 @@ with local bare repos as remotes, so nothing touches a real project or GitHub, a
 |---|---|---|---|---|
 | `python tests/resume_e2e.py` | `scratch.py` (init, commit, decide, resume, stop, switch) and the worker lock, single repo, two clones as two machines plus a third for a clean fast-forward | 2 real `claude -p` dev runs (Sonnet, about $0.20 list) | about 1.5 min | 33 |
 | `python tests/resume_workspace.py` | the same for a multi-repo workspace (two repos, scratch in the workspace) | none | seconds | 6 |
+| `python tests/shared_repo.py` | a shared repo: a teammate pushes to main during a dev run, a known-broken suite on main (`baseline`), `sync-main` (refused mid-batch, dry run, merge, conflict + abort), batch diffs after a sync, a teammate's commit on the feature branch, an orphaned worker after a launcher SIGKILL | 3 real `claude -p` runs (2 dev, 1 reviewer; Sonnet) | about 2 min | 24 |
 | `python tests/existing_project.py` | every step of [EXISTING-PROJECTS.md](../EXISTING-PROJECTS.md): a pre-0.11.0 `.scratch/` turned into a repo, an old copy on a second machine moved aside, and the wrong way (plain `init` on a second machine -> `DIVERGED`, nothing merged) | none | seconds | 12 |
 
 Both print one `PASS`/`FAIL` line per check and end with `<n>/<total> checks passed`; exit 0 only when all pass.
@@ -48,15 +49,20 @@ or the role JSON files. Add a row to "Results" below with the date, OS and numbe
 | 2026-10-14 | same | `existing_project.py` | 12/12 | old runs.log without `ticket=` reads as `no run logged` |
 | 2026-10-14 | same | `resume_e2e.py` (first version, before it was moved into the repo) | 33/33 | dev PASS 26 s; the stopped worker left only `?? __pycache__/`, which alone made switch STOP and resume ASK |
 
-Not yet run on Linux or macOS. The POSIX paths differ: `pid_alive` uses `os.kill(pid, 0)` and `stop` kills the
-worker's process group (the launcher starts it with `start_new_session`). Run both tests on the Linux machine before
-relying on force-stop there.
+| 2026-10-15 | CachyOS Linux (kernel 7.2), Claude Code 2.1.296, git 2.56, Python 3.14 | `resume_e2e.py` (0.11.1, unchanged) | 33/33 | first Linux run; stop killed the worker's process group, no claude process left |
+| 2026-10-15 | same | `resume_workspace.py`, `existing_project.py` (0.11.1) | 6/6, 12/12 | |
+| 2026-10-15 | same | launcher SIGKILLed mid-run (0.11.1, ad hoc) | found a bug | the worker kept running (own session) and the lock read as stale, so a second dispatch STARTED beside it; fixed in 0.12.0 (`read_lock` checks the worker pid too) |
+| 2026-10-15 | same | `shared_repo.py` (0.12.0) | 24/24 | dev PASS while a teammate pushed main; reviewer PASS, called the broken legacy test pre-existing (baseline) and never mentioned the teammate's file |
+| 2026-10-15 | same | `resume_e2e.py`, `resume_workspace.py`, `existing_project.py` (0.12.0) | 33/33, 6/6, 12/12 | |
+
+macOS: not run.
 
 ## Not covered
 
 - The Hermes backend under `stop` (only the claude backend was force-stopped).
-- `stop` while the launcher itself is killed first (the lock then goes stale; `resume` removes it, tested only by code
-  reading).
+- `stop` while the launcher itself is killed first: covered on Linux by `shared_repo.py` (fake worker pid) and an ad
+  hoc real run; not on Windows.
+- `sync-main` in a multi-repo workspace (tested with one repo in a workspace config only), and a real PR flow.
 - A real GitHub private remote (tests use local bare repos; auth prompts are disabled with `GIT_TERMINAL_PROMPT=0`,
   so a remote that needs a login fails the fetch and `resume` reports `fetch failed`, not synced).
 - The planner following orchestrate step 0 in a real Hermes session (the scripts were tested, not the skill text).

@@ -8,7 +8,8 @@ Lookup, from the repo root (or any folder):
    overrides them per repo. Scratch defaults to <workspace>/.scratch.
 Relative paths in a config resolve from the folder the config file sits in.
 
-Keys: test, models, protected (as before), scratch (folder for tickets, reviews, runs), rules (file or list of files
+Keys: test, models, protected (as before), shared (true: other people work in the repo; see orchestrate),
+scratch (folder for tickets, reviews, runs), rules (file or list of files
 pasted into every worker prompt; default: the repo's AGENTS.md and CLAUDE.md, whichever exist, in that order), rules_max_chars (default 40000), path (folders put in
 front of PATH for the worker, e.g. ["~/.local/bin"]).
 
@@ -86,7 +87,11 @@ def lock_path(scratch):
 
 
 def read_lock(scratch):
-    """(lock dict or None, alive). alive = the launcher process named in the lock is still running."""
+    """(lock dict or None, alive). alive = the launcher OR the worker named in the lock is still running.
+
+    measured (Linux): a SIGKILLed launcher leaves its worker running (the worker has its own session so `stop` can kill
+    its group), and a lock that checked only the launcher let a second dispatch start beside the orphan.
+    """
     p = lock_path(scratch)
     if not p.is_file():
         return None, False
@@ -94,7 +99,7 @@ def read_lock(scratch):
         d = json.loads(p.read_text(encoding="utf-8"))
     except ValueError:
         return {"raw": p.read_text(encoding="utf-8", errors="replace")}, False
-    return d, pid_alive(d.get("launcher_pid"))
+    return d, pid_alive(d.get("launcher_pid")) or pid_alive(d.get("worker_pid"))
 
 
 def kill_tree(pid):

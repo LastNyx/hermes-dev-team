@@ -21,7 +21,7 @@ You are on the feature branch already. Never switch branches, merge, push, or re
 ## FAIL instead of guessing when
 
 The tree is dirty; the ticket is unclear or needs a fact it does not contain (you have no web); there is no seam;
-the `Test command` cannot run; the work needs a second commit (scope grew). Write the reason in `## Result` too.
+the `Test command` cannot run (a failure listed in the feature's `baseline*.md` is pre-existing: not yours, not a reason to FAIL, never fix it unless the ticket says so); the work needs a second commit (scope grew). Write the reason in `## Result` too.
 Never run the ticket's `Verify` line (the planner runs it). Never edit the glossary (CONTEXT.md, GLOSSARY.md), ADRs, `docs/dev-notes.md`, other tickets, or package/lock/test-config files
 (denied; if the ticket needs a new dependency or config change, FAIL `needs <file> change: <what>`).
 

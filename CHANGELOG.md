@@ -5,6 +5,29 @@ mark an entry **action** when another machine must do something (re-run `link-sk
 
 Format: version, date, then one line per change, naming the file.
 
+## 0.12.0 - 2026-10-15
+
+- **Shared repos** (other people commit to the repo, with their own workflow): `"shared": true` in the config.
+  `skills/orchestrate` 0.6.0 gets a "Shared repo" section: config outside the repo, glossary/ADRs/dev notes stay in the
+  scratch folder, baseline before the first ticket, sync main only between batches, one feature branch per person,
+  step 10 may be a pull request.
+- `kit/scratch.py sync-main [--apply]`: merges `origin/main` into the feature branch (never rebase), only when no
+  ticket of the branch is `in-progress`/`review`; aborts on a conflict and leaves the branch unchanged; fast-forwards
+  the local main; prints the merge commit as the next batch's `base:`.
+- `kit/scratch.py baseline <feature>`: runs the full test command before the first ticket and commits the tail to
+  `<feature>/baseline.md`. `kit/roles/reviewer.md` and `dev.md`: failures listed there are pre-existing, not findings.
+- `kit/scratch.py resume`: `WARN ... commit by someone else on the feature branch` (author email differs, merges and
+  main's commits excluded); an orphaned worker (launcher gone, worker alive) is `RESUME STOP orphaned worker`.
+- `kit/teamcfg.py read_lock`: the lock is alive while the launcher OR the worker runs. Measured on Linux: a SIGKILLed
+  launcher left its worker running (own session), and a second dispatch started beside it.
+- `kit/run-worker.py guard:pushed`: fails only when a remote ref moved to a commit that exists in this clone (pushed
+  from here). Before, a teammate's push to main during a run failed the worker. Measured both ways.
+  With `shared` and no `glossary` key, `<scratch>/GLOSSARY.md` is the glossary.
+- `tests/shared_repo.py` (new): 24 checks, 3 real runs (2 dev, 1 reviewer). Linux results for all four test files in
+  docs/testing.md; first Linux run of the 0.11 tests.
+- **action:** start a new planner session to load orchestrate 0.6.0. For a shared repo, set `"shared": true` and move
+  its config out of the repo (see the skill).
+
 ## 0.11.1 - 2026-10-14
 
 - `EXISTING-PROJECTS.md` (new): per-machine guide to turn on resume + switching for a project that used the kit

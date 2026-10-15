@@ -102,6 +102,13 @@ minutes, input / cache write / cache read / output tokens, cache hit %, list pri
 token columns to runs logged before 0.8.0).
 Commits never get a Co-Authored-By trailer.
 
+## Shared repos
+
+If other people commit to the repo with their own workflow, the kit stays your personal workflow: set
+`"shared": true` in a `.team.json` in the PARENT folder (`"repos": {"<repo>": {...}}`), keep glossary and notes in the
+scratch folder, run `python KIT/scratch.py baseline <feature>` before the first ticket, and bring main in only between
+batches with `python KIT/scratch.py sync-main --apply`. See the orchestrate skill, "Shared repo".
+
 ## Resume and switching machines
 
 There is no handoff file. The scratch folder (tickets, `batches.md`, reviews, `runs.log`, and one `decisions.md` per

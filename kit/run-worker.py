@@ -305,6 +305,22 @@ def snapshot(protected):
             "protected": sorted(protected_changes(None, protected)), "remotes": remote_refs()}
 
 
+def pushed_from_here(before, after):
+    """True when a remote ref changed to a commit that exists in this clone, i.e. it was pushed from here.
+
+    A teammate's push points at commits this clone has never fetched (the launcher does not fetch during a run), so in
+    a shared repo it no longer fails the worker. `before`/`after` are `git ls-remote` outputs.
+    """
+    old = set(before.splitlines())
+    for line in after.splitlines():
+        if line in old or "\t" not in line:
+            continue
+        sha = line.split("\t", 1)[0]
+        if subprocess.run(["git", "cat-file", "-e", f"{sha}^{{commit}}"], capture_output=True).returncode == 0:
+            return True
+    return False
+
+
 def guards_after(snap, protected):
     g = []
     if git("rev-parse", "main") != snap["main"]: g.append("main-moved")
@@ -315,7 +331,8 @@ def guards_after(snap, protected):
     if touched:
         g.append("test-config-changed:" + "+".join(touched[:3]))
     now = remote_refs()                                        # measured: a hermes worker pushed when not told not to
-    pushed = [r for r, before in snap["remotes"].items() if before is not None and now.get(r) not in (None, before)]
+    pushed = [r for r, before in snap["remotes"].items() if before is not None and now.get(r) not in (None, before)
+              and pushed_from_here(before, now.get(r))]
     if pushed:
         g.append("pushed:" + "+".join(pushed))
     return g
@@ -423,6 +440,8 @@ def main():
         prompt += (f"\nThe scratch folder is {scratch.as_posix()}: wherever your instructions say `.scratch/`, use that"
                    " folder (absolute paths).")
     glossary = cfg.get("glossary")
+    if not glossary and cfg.get("shared") and (scratch / "GLOSSARY.md").is_file():
+        glossary = str(scratch / "GLOSSARY.md")             # shared repo: the glossary stays out of the repo
     if glossary and a.role != "dev":
         gp = (tc["base"] / glossary).expanduser().resolve()
         settings["permissions"]["allow"].append(f"Read({perm_path(gp)})")

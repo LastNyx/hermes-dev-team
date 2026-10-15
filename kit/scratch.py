@@ -14,6 +14,8 @@ Usage (cwd = the project repo, or the workspace root / any of its repos):
     python <kit>/scratch.py decide <feature> "<text>"  # one line in <feature>/decisions.md, committed
     python <kit>/scratch.py stop                    # force-stop the running worker; logs it in decisions.md
     python <kit>/scratch.py switch                  # push scratch + feature branch(es) for the other machine
+    python <kit>/scratch.py sync-main [--apply]     # shared repo, between batches: merge origin/main into the branch
+    python <kit>/scratch.py baseline <feature>      # before the first ticket: record what already fails on main
 
 Last line: `<COMMAND> OK ...` (exit 0) or `<COMMAND> STOP <reason>` (exit 1): a STOP needs the user.
 """
@@ -127,7 +129,124 @@ def commit_for(repo, name):
     return [l for l in out.splitlines() if l.rstrip().endswith(f"({name})")]
 
 
+def main_ref(repo):
+    """The name of the main branch: main or master, whichever exists locally or on origin."""
+    for b in MAIN:
+        if git(repo, "rev-parse", "--verify", "-q", b) or git(repo, "rev-parse", "--verify", "-q", f"origin/{b}"):
+            return b
+    return None
+
+
+def foreign_commits(repo):
+    """Non-merge commits on the feature branch (not on main or origin/main) whose author email is not this user's."""
+    me, mb = (git(repo, "config", "user.email") or "").lower(), main_ref(repo)
+    if not mb:
+        return []
+    nots = [r for r in (mb, f"origin/{mb}") if git(repo, "rev-parse", "--verify", "-q", r)]
+    out = git(repo, "log", "--no-merges", "--format=%h %ae %s", "HEAD", *[f"^{r}" for r in nots]) or ""
+    return [l for l in out.splitlines() if l.split(" ", 2)[1].lower() != me]
+
+
+def open_tickets_on(scratch, repo_name, branch, single):
+    """Tickets of features on this branch whose Status is in-progress or review (a batch is mid-way)."""
+    busy = []
+    for fd in sorted(p for p in scratch.iterdir() if (p / "issues").is_dir()) if scratch.is_dir() else []:
+        for t in tickets(fd):
+            if t["branch"] != branch or (not single and t["repo"] != repo_name):
+                continue
+            if t["status"] in ("in-progress", "review"):
+                busy.append(f"{fd.name}/{t['name']} {t['status']}")
+    return busy
+
+
 # ---------------------------------------------------------------- commands
+
+def cmd_sync_main(a):
+    """Shared repos: bring teammates' new main commits into the feature branch, only between batches.
+
+    Merge (never rebase: no history rewrite, so the launcher's guards and pushed branches stay valid). The merge commit
+    is the next batch's `base:`, so the reviewer's `git diff <base>...HEAD` shows only this feature's later commits.
+    The local main is fast-forwarded too, so `git merge-base HEAD main` (batch 1, docs) excludes teammates' work.
+    On a conflict the merge is aborted and nothing changes: the user resolves it.
+    """
+    tc, scratch, repos = ctx()
+    lock, alive = teamcfg.read_lock(scratch)
+    if alive:
+        print("SYNC STOP a worker is running; wait for its exit notice"); return 1
+    single = not tc["repos"]
+    stop, report = [], []
+    for name, repo in repos.items():
+        br, mb = git(repo, "branch", "--show-current"), main_ref(repo)
+        if not mb or not br or br in MAIN:
+            report.append(f"{name}: on {br or 'detached HEAD'}, nothing to sync"); continue
+        if not has_origin(repo):
+            report.append(f"{name}: no remote, nothing to sync"); continue
+        if git(repo, "fetch", "-q", "origin") is None:
+            stop.append(f"{name}: fetch failed (offline or no access)"); continue
+        new = git(repo, "rev-list", "--count", f"HEAD..origin/{mb}") or "0"
+        if new == "0":
+            report.append(f"{name} {br}: origin/{mb} has nothing new"); continue
+        log = git(repo, "log", "--oneline", "-5", f"HEAD..origin/{mb}") or ""
+        report.append(f"{name} {br}: origin/{mb} has {new} new commit(s):\n" + "\n".join("      " + l for l in log.splitlines()))
+        busy = open_tickets_on(scratch, name, br, single)
+        if busy:
+            stop.append(f"{name}: a batch is mid-way ({', '.join(busy[:4])}); sync only when every ticket is todo/done/blocked")
+            continue
+        if dirty(repo):
+            stop.append(f"{name}: dirty tree; not merging"); continue
+        if not a.apply:
+            continue
+        r = subprocess.run(["git", "-C", str(repo), "merge", "--no-ff", "--no-edit", "-m",
+                            f"Merge origin/{mb} into {br}", f"origin/{mb}"], capture_output=True, text=True, env=ENV)
+        if r.returncode:
+            files = git(repo, "diff", "--name-only", "--diff-filter=U") or ""
+            git(repo, "merge", "--abort")
+            stop.append(f"{name}: CONFLICT merging origin/{mb}, merge aborted, branch unchanged; the user resolves it. "
+                        f"Files: {', '.join(files.split()) or '?'}"); continue
+        head = git(repo, "rev-parse", "--short", "HEAD")
+        if git(repo, "fetch", "-q", "origin", f"{mb}:{mb}") is None:     # fast-forward local main (not checked out)
+            report.append(f"{name}: WARN local {mb} could not be fast-forwarded; pass base explicitly")
+        report.append(f"{name} {br}: merged origin/{mb} -> {head}. Record base: {head} for the next batch")
+    for r in report:
+        print("  " + r)
+    if stop:
+        print("SYNC STOP " + "; ".join(stop)); return 1
+    print("SYNC OK" + ("" if a.apply else " (dry run; --apply merges)"))
+    return 0
+
+
+def cmd_baseline(a):
+    """Run the full test command before any feature commit and keep its result in <feature>/baseline.md.
+
+    In a shared repo main may already fail (code without tests, known-broken suites). The reviewer and dev treat what is
+    listed there as pre-existing, not as their findings.
+    """
+    tc, scratch, repos = ctx()
+    cmd = tc["cfg"].get("test")
+    fd = scratch / a.feature
+    if not fd.is_dir():
+        print(f"BASELINE STOP no feature folder {fd.as_posix()}"); return 1
+    repo = pathlib.Path.cwd().resolve()
+    top = git(repo, "rev-parse", "--show-toplevel")
+    if not top or not cmd:
+        print("BASELINE STOP run it from the repo root, with a `test` command in the config"); return 1
+    repo = pathlib.Path(top)
+    mb = main_ref(repo)
+    ahead = git(repo, "rev-list", "--count", f"{mb}..HEAD") if mb else None
+    if ahead not in ("0", None) and not a.force:
+        print(f"BASELINE STOP the branch already has {ahead} commit(s) beyond {mb}; run it before the first ticket "
+              "(or --force to record the current state)"); return 1
+    r = subprocess.run(cmd, shell=True, cwd=repo, capture_output=True, text=True, env=ENV, timeout=a.timeout)
+    tail = "\n".join((r.stdout + r.stderr).strip().splitlines()[-a.lines:])
+    p = fd / ("baseline.md" if len(repos) <= 1 else f"baseline-{repo.name}.md")
+    p.write_text(f"# Baseline: {a.feature} ({repo.name})\n\nBefore the first ticket, at {git(repo, 'rev-parse', '--short', 'HEAD')}: "
+                 f"`{cmd}` exited {r.returncode}. Failures below already existed on {mb}; they are not this feature's "
+                 f"findings. A NEW failure is.\n\n```text\n{tail}\n```\n", encoding="utf-8")
+    sha = commit_scratch(scratch, f"baseline: {a.feature} exit {r.returncode}")
+    print(f"BASELINE OK exit {r.returncode} -> {p.relative_to(scratch).as_posix()}" + (f" committed {sha}" if sha else ""))
+    return 0
+
+
 
 def cmd_init(a):
     tc, scratch, repos = ctx()
@@ -245,6 +364,10 @@ def cmd_resume(a):
         return 1
     lock, alive = teamcfg.read_lock(scratch)
     if alive:
+        if not teamcfg.pid_alive(lock.get("launcher_pid")):
+            print(f"RESUME STOP orphaned worker: {lock.get('role')} {lock.get('ticket') or '-'} since "
+                  f"{lock.get('stamp')} still runs but its launcher is gone (no exit notice will come); ask the user, "
+                  "then `scratch.py stop`"); return 1
         print(f"RESUME OK worker running: {lock.get('role')} {lock.get('ticket') or '-'} since {lock.get('stamp')}; "
               "wait for its exit notice"); return 0
     if lock:
@@ -294,6 +417,9 @@ def cmd_resume(a):
                 msgs.append(f"{rn}: checked out {br} (was {cur})")
             ok, m = sync(repo, br, f"{rn} {br}")
             (msgs if ok else stop).append(m)
+            for f in foreign_commits(repo):
+                msgs.append(f"WARN {rn} {br}: commit by someone else on the feature branch: {f} "
+                            "(one feature branch per person; show the user)")
         counts = {}
         for t in ts:
             counts[t["status"]] = counts.get(t["status"], 0) + 1
@@ -396,9 +522,12 @@ def main():
     p = sub.add_parser("decide"); p.add_argument("feature"); p.add_argument("text")
     p = sub.add_parser("stop"); p.add_argument("--wait", type=int, default=60)
     sub.add_parser("switch")
+    p = sub.add_parser("sync-main"); p.add_argument("--apply", action="store_true")
+    p = sub.add_parser("baseline"); p.add_argument("feature"); p.add_argument("--force", action="store_true")
+    p.add_argument("--lines", type=int, default=60); p.add_argument("--timeout", type=int, default=900)
     a = ap.parse_args()
     return {"init": cmd_init, "resume": cmd_resume, "commit": cmd_commit, "decide": cmd_decide, "stop": cmd_stop,
-            "switch": cmd_switch}[a.cmd](a)
+            "switch": cmd_switch, "sync-main": cmd_sync_main, "baseline": cmd_baseline}[a.cmd](a)
 
 
 if __name__ == "__main__":
