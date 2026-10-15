@@ -1,6 +1,6 @@
 ---
 name: orchestrate
-description: Run dev, reviewer, docs workers on tickets; verify results.
+description: Run dev, reviewer, docs, researcher workers; verify results.
 version: 0.8.0
 author: hermes-dev-team contributors
 license: MIT

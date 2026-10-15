@@ -26,6 +26,8 @@ Ideas from github.com/DietrichGebert/ponytail (MIT; not installed), and a resear
 - `skills/claude-p-role-workers`, `skills/orchestrate/references/changing-skills.md`: lessons on testing guards through
   `main()`, testing skill text with a headless planner, grilling with concrete examples, one release per design.
 - `tests/ponytail_ideas.py` (9 checks, 2 real runs), `tests/researcher.py` (19 checks, 1 real run; `--ponytail` 26).
+- Docs for the new role: README, TEAM, LEARN (step 7: research home), launcher usage, `docs/benchmarks.md`
+  researcher rows, testing gaps.
 - **action:** start a new planner session to load orchestrate 0.8.0. Optional: set `HDT_RESEARCH_HOME`, then
   `python KIT/research.py init`.
 

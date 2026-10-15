@@ -36,7 +36,10 @@ Learn the hermes-dev-team repo at <REPO>. Do these steps in order and stop to as
    PASS or a FAIL that names a missing feature folder both prove the launcher works; an ERROR line or a
    traceback does not. Delete the throwaway repo afterwards (cd out of it first).
 6. Report in at most 8 lines: versions, skills linked, the memory saved, and the smoke result.
-7. If I have projects that used the kit before 0.11.0, tell me to follow <REPO>/EXISTING-PROJECTS.md for each one
+7. Research home: tell me the researcher keeps clones and findings in `HDT_RESEARCH_HOME` (else `~/research`; keep
+   it out of OneDrive, AppData and paths with spaces). Ask whether to run `python <REPO>/kit/research.py init`;
+   never set the environment variable yourself.
+8. If I have projects that used the kit before 0.11.0, tell me to follow <REPO>/EXISTING-PROJECTS.md for each one
    (it needs a private remote I create and a choice of which machine is newest). Do not run it yourself unasked.
 
 Do not commit or push. Do not change Hermes config. The only repo changes allowed are skill merges I approved in step 3.

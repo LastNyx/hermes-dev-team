@@ -75,6 +75,8 @@ macOS: not run.
 - A real GitHub private remote (tests use local bare repos; auth prompts are disabled with `GIT_TERMINAL_PROMPT=0`,
   so a remote that needs a login fails the fetch and `resume` reports `fetch failed`, not synced).
 - The planner past step 2 (dispatch, review, docs) on the split skill; steps 0-2 were run once (see Results).
+- The researcher with `--web`, inside a project's feature scratch (only the research home was run), and the planner
+  following `references/research.md` in a real session. `ponytail_ideas.py` and `researcher.py` not yet on Linux.
 
 ## Earlier tests
 

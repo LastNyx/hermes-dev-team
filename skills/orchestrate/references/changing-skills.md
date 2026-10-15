@@ -12,6 +12,15 @@ Load before patching `orchestrate` or `claude-p-role-workers` (or any file under
 - Matt Pocock's skills are not part of the repo: never patch them, so they can still be updated from upstream.
 - A lesson that helps every project goes into the team repo's `kit/roles/*.md` only after the user has read it.
 
+## Adding a role or a role rule
+
+- Ship the role prompt, its JSON allow-list, the launcher wiring, a row in TEAM.md, a design row, a skill reference
+  with its trigger row, and a test file with at least one real run; one grilled design is one release.
+- Each new role rule gets a toy repo where the wrong path is tempting, run for real; if the worker ignores a rule
+  written as a principle, rewrite it as a numbered procedure step and rerun.
+- When a `## Result` or review gains a new line (e.g. `Not checked:`), also add the planner step that shows it to the
+  user, or nobody reads it.
+
 ## Keeping SKILL.md small
 
 The planner loads all of SKILL.md every session, so its size is paid on every project. Check `wc -w` before adding.

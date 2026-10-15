@@ -1,18 +1,20 @@
 # hermes-dev-team
 
 A small dev team for [Hermes Agent](https://hermes-agent.nousresearch.com/docs): you talk to a planner in Hermes, and it
-starts headless [Claude Code](https://docs.anthropic.com/en/docs/claude-code) workers (dev, reviewer, docs) one at a
+starts headless [Claude Code](https://docs.anthropic.com/en/docs/claude-code) workers (dev, reviewer, docs, researcher) one at a
 time. Each worker runs under a deny-by-default allow-list, so no single session carries all the context and no worker
 can switch branches, push, or write outside the repo.
 
 **Status:** the kit has run end to end on a toy repo (dev, reviewer and docs all PASS) and blocked 8 of 8 forbidden
-actions; see [docs/design.md](docs/design.md). It has not yet been used on a real project.
+actions; see [docs/design.md](docs/design.md). The researcher passed a planted-instruction test and a real run on
+a public repo (0.13.0). It has not yet been used on a real project.
 
 ## What is here
 
 - [TEAM.md](TEAM.md): the roles on one page.
 - `kit/run-worker.py`: the launcher. `kit/roles/<role>.md` + `<role>.json`: each worker's prompt and permissions.
 - `kit/scratch.py`: resume in a new session or on another machine, force-stop a worker, switch machines.
+- `kit/research.py`: the research home (clone a repo to study, create a topic, delete the clone when done).
 - `skills/`: two Hermes skills for the planner (orchestrate, claude-p-role-workers).
 - Planning uses [Matt Pocock's skills](https://github.com/mattpocock/skills) as-is, installed from the Hermes skill hub
   (not vendored, so they keep updating): grill-with-docs, grilling, domain-modeling, to-tickets.
@@ -21,7 +23,8 @@ actions; see [docs/design.md](docs/design.md). It has not yet been used on a rea
 - [CHANGELOG.md](CHANGELOG.md): every skill, role, or launcher change; marks what to re-copy after `git pull`.
 - [docs/design.md](docs/design.md): decisions, measurements, and what was rejected.
 - [docs/benchmarks.md](docs/benchmarks.md): every measured run (time, calls, tokens, cost) per backend and model.
-- [docs/testing.md](docs/testing.md) + `tests/`: the repeatable tests (resume, force-stop, switching), what they check, results.
+- [docs/testing.md](docs/testing.md) + `tests/`: the repeatable tests (guards, resume, force-stop, switching, shared repos, worker
+  behaviour, researcher), what they check, results.
 
 ## Requirements
 

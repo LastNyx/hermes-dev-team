@@ -3,6 +3,8 @@
 
 Usage (cwd = the project repo root):
     python <kit>/run-worker.py <role> "<prompt>" [--test-cmd "<cmd>"] [--model M] [--max-turns N]
+    python <kit>/run-worker.py researcher "questions: <file> out: <file> source: <folder>" [--web]
+        (cwd = a project repo or the research home; Claude backend only; may run on main, it never commits)
 
 Config: the repo's .team.json, or a workspace ../.team.json whose "repos" map names this folder (see teamcfg.py).
 The allowed test command is found in this order: --test-cmd; for dev, the ticket's `Test command:` line
