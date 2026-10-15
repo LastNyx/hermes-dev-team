@@ -95,6 +95,27 @@ The dispatch is the same command for both; the planner never picks the backend.
 - Measure a mechanism end to end before designing around it.
 - Test launcher logic that needs no model (config lookup, rules assembly, ticket parsing) by importing the module
   in a fixture script over several toy dirs; spend worker runs only on behaviour that needs a model.
+  For guards and RESULT/runs.log handling, go one level up: import `run-worker.py` via importlib, replace
+  `stream_worker` with a scripted worker (does the git action, returns a `result` event claiming `RESULT: PASS`),
+  set `sys.argv` and call `main()` with stdout captured. That exercises config, lock, snapshot, guards, verdict and
+  runs.log for real with no model cost.
+- To prove a fix closes a regression, run the new test against the old code too: `git archive <old> kit | tar -x -C
+  <scratch dir>`, copy the test beside it, run it; the old code must fail exactly the cases the fix targets.
+- To test planner-facing skill text (not scripts), run a real headless planner on a throwaway workspace built to hit
+  the triggers under test (e.g. `shared: true`, a red test on main, a ticket that deletes a file):
+  `hermes chat --query-file <prompt> -Q --format stream-json -s orchestrate -t skills,terminal,file --max-turns 40
+  --source tool --in <repo>`. The prompt says "I am not available: where the skill says ask or wait, write the
+  question instead; never dispatch". Then grep the stream for `skill_view` calls and check git/scratch state; that
+  shows whether references load from the trigger table, which reading the skill cannot.
+- Judging an outside repo or prompt pack for ideas: shallow-clone it into scratch, read its core prompt/code (not the
+  README hype), map each idea onto a concrete kit file (role prompt, reviewer axis, launcher), mark its benchmark
+  numbers "claimed, not run", and say why installing it would not reach workers (`--setting-sources ""`). Delete the
+  clone afterwards.
+- Grilling kit design: give every abstract choice a concrete example inside the question (a sample ticket, a sample
+  file); a bare "who owns rung 1" got "don't understand, explain more". Ask about scope limits early (e.g. "code only,
+  or any research?") since the user raises them.
+- Version bumps: one grilled design = one release (one CHANGELOG entry, one push), even when built in several tested
+  parts; never plan a version per part.
 - Record every measured run (backend, model/effort, wall, calls, in/cache_w/cache_r/out, $) as a row in the team
   repo's `docs/benchmarks.md`; the user reads it on the other machine after `git pull`.
 - Do not claim one backend is cheaper from toy runs: say the mechanism (fewer calls, smaller system prompt), n, and

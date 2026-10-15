@@ -104,6 +104,15 @@ minutes, input / cache write / cache read / output tokens, cache hit %, list pri
 token columns to runs logged before 0.8.0).
 Commits never get a Co-Authored-By trailer.
 
+## Research
+
+Ask the planner how some code works, or whether a repo is worth learning: it writes 3-6 questions, you approve them,
+and a read-only `researcher` worker answers each with `path:line` citations in one findings file (never running
+the source's code; its numbers are "claimed, not run"). The planner gives the recommendation. Research outside a
+project lives in a research home: `HDT_RESEARCH_HOME`, else `~/research` (keep it out of OneDrive, AppData, and
+paths with spaces); `python KIT/research.py init`, `clone <url>`, `topic <name>`, `done <name>`. See the orchestrate
+skill's `references/research.md`.
+
 ## Shared repos
 
 If other people commit to the repo with their own workflow, the kit stays your personal workflow: set

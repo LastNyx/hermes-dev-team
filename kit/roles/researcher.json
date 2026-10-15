@@ -1,0 +1,19 @@
+{
+ "permissions": {
+  "defaultMode": "dontAsk",
+  "allow": [
+   "Read(./**)",
+   "Glob",
+   "Grep"
+  ],
+  "deny": [
+   "Read(./.scratch/runs/**)",
+   "Edit(./.scratch/.git/**)"
+  ]
+ },
+ "includeCoAuthoredBy": false,
+ "attribution": {
+  "commit": "",
+  "pr": ""
+ }
+}

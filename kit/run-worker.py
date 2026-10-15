@@ -28,7 +28,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import teamcfg  # noqa: E402
 
 KIT = pathlib.Path(__file__).resolve().parent
-DEFAULTS = {"dev": ("sonnet", 40), "reviewer": ("sonnet", 25), "docs": ("haiku", 25)}
+DEFAULTS = {"dev": ("sonnet", 40), "reviewer": ("sonnet", 35), "docs": ("haiku", 25), "researcher": ("sonnet", 40)}
 TOOLS = "Read,Edit,Write,Glob,Grep,Bash"
 # Files that decide what the allowed test command runs. If a worker could edit them, the test command would run
 # anything (e.g. a rewritten "test" script). Denied in roles/dev.json AND checked after every run (guard).
@@ -137,6 +137,40 @@ def scratch_rule(rule, scratch, repo):
     if not m or scratch == repo / ".scratch":
         return None
     return f"{m.group(1)}({perm_path(scratch)}{m.group(2) or ''})"
+
+
+def research_grants(settings, prompt, web):
+    """Researcher (B10): read the source and the questions, write ONLY the findings file, git log/show on the source.
+
+    Paths come from the prompt (`questions:`, `out:`, `source:`). Nothing else is writable: the role JSON allows no
+    Edit, and the only Bash rules added are `git -C <source> log` / `show`. Returns an error string or None.
+    """
+    q, out, src = (prompt_path(prompt, k) for k in ("questions", "out", "source"))
+    if not (q and out and src):
+        return "prompt needs questions: <file> out: <file> source: <folder>"
+    if not q.is_file():
+        return f"no questions file {q.as_posix()}"
+    if not src.is_dir():
+        return f"no source folder {src.as_posix()}"
+    if out.parent.resolve() != q.parent.resolve():
+        return "out: must sit next to questions: (one topic folder)"
+    perms = settings["permissions"]
+    perms["allow"] += [f"Read({perm_path(src)}/**)", f"Read({perm_path(q)})", f"Read({perm_path(out)})",
+                       f"Edit({perm_path(out)})"]
+    perms["allow"] += [f"Bash(git -C {src.as_posix()} {c}:*)" for c in ("log", "show")]
+    if web:
+        perms["allow"] += ["WebFetch", "WebSearch"]
+    return None
+
+
+def research_prompt(prompt, web):
+    """Rewrite the three paths absolute and tell the worker the one Bash form it may use."""
+    for key in ("questions", "out", "source"):
+        pp = prompt_path(prompt, key)
+        prompt = re.sub(rf"{key}:\s*\S+", lambda _m, k=key, v=pp: f"{k}: {v.as_posix()}", prompt, count=1)
+    src = prompt_path(prompt, "source").as_posix()
+    return (prompt + f"\nGit history, if a question needs it, only as: `git -C {src} log ...` or `git -C {src} show ...`"
+            " (exactly that path, forward slashes)." + ("\nweb: on" if web and "web:" not in prompt else ""))
 
 
 def tool_line(name, inp):
@@ -406,6 +440,7 @@ def main():
     ap.add_argument("--effort", choices=["low", "medium", "high", "xhigh", "max"],
                     help="Claude Code effort; default .team.json effort (string or per-role map), else Claude's default")
     ap.add_argument("--backend", choices=["claude", "hermes", "auto"], help="default: .team.json backend, else auto")
+    ap.add_argument("--web", action="store_true", help="researcher only: allow WebFetch/WebSearch for this run")
     a = ap.parse_args()
     if not a.role or a.prompt is None:
         ap.error("role and prompt are required")
@@ -421,6 +456,10 @@ def main():
     backend = pick_backend(a.role, cfg, a.backend)
     if backend == "claude" and not shutil.which("claude"):
         print(f"RESULT {a.role} ERROR claude CLI not on PATH"); return 2
+    if a.role == "researcher" and backend == "hermes":     # B10: read-only must be enforced, not asked for
+        print("RESULT researcher ERROR the researcher needs the claude backend (only its allow-list enforces read-only)"); return 2
+    if a.web and a.role != "researcher":
+        print(f"RESULT {a.role} ERROR --web is for the researcher only"); return 2
     hprofile = cfg.get("hermes_profile") or "hdt-worker"
     if backend == "hermes":
         if not shutil.which("hermes"):
@@ -438,8 +477,8 @@ def main():
     effort = cfg.get("effort")
     effort = a.effort or ((effort or {}).get(a.role) if isinstance(effort, dict) else effort)
     test_cmd = a.test_cmd or (header_line(ticket, "Test command") if a.role == "dev" else None) or \
-        (cfg.get("test") if a.role != "docs" else None)
-    target = ticket or prompt_path(a.prompt, "feature")
+        (cfg.get("test") if a.role not in ("docs", "researcher") else None)
+    target = ticket or prompt_path(a.prompt, "feature") or prompt_path(a.prompt, "out")
     feature = target.relative_to(scratch).parts[0] if target and scratch in target.parents else "-"
 
     settings = json.loads(settings_file.read_text(encoding="utf-8"))
@@ -471,6 +510,14 @@ def main():
             perms["deny"].append(f"Edit({perm_path(scratch)}/.git/**)")   # the scratch repo's own git
         prompt += (f"\nThe scratch folder is {scratch.as_posix()}: wherever your instructions say `.scratch/`, use that"
                    " folder (absolute paths).")
+    tools = TOOLS
+    if a.role == "researcher":
+        err = research_grants(settings, a.prompt, a.web)
+        if err:
+            print(f"RESULT researcher ERROR {err}"); return 2
+        prompt = research_prompt(a.prompt, a.web)
+        if a.web:
+            tools += ",WebFetch,WebSearch"
     glossary = cfg.get("glossary")
     if not glossary and cfg.get("shared") and (scratch / "GLOSSARY.md").is_file():
         glossary = str(scratch / "GLOSSARY.md")             # shared repo: the glossary stays out of the repo
@@ -495,7 +542,7 @@ def main():
                    + (KIT / "roles" / tool_rules).read_text(encoding="utf-8"))
 
     branch_before = git("branch", "--show-current")
-    if branch_before in ("main", "master"):
+    if branch_before in ("main", "master") and a.role != "researcher":   # the researcher never commits
         print(f"RESULT {a.role} ERROR refusing to run on {branch_before}; check out the feature branch"); return 2
     snap = snapshot(protected)
     st = {"role": a.role, "model": model, "test_cmd": test_cmd, "feature": feature, "repo_name": repo.name,
@@ -523,7 +570,7 @@ def main():
             return run_hermes(st, role_prompt, prompt, runs, cut, cfg, hprofile, effort, turns, env, progress_path,
                               snap, protected, out_path, lock)
         return run_claude(st, a.role, settings, role_prompt, prompt, agents_path, model, turns, effort, cut, env,
-                          progress_path, snap, protected, out_path, lock)
+                          progress_path, snap, protected, out_path, lock, tools)
     finally:
         try:
             pathlib.Path(lock["path"]).unlink()
@@ -532,10 +579,10 @@ def main():
 
 
 def run_claude(st, role, settings, role_prompt, prompt, agents_path, model, turns, effort, cut, env, progress_path,
-               snap, protected, out_path, lock):
+               snap, protected, out_path, lock, tools=TOOLS):
     agents_path.write_text(json.dumps({role: {"description": f"{role} worker", "prompt": role_prompt}}),
                            encoding="utf-8")
-    cmd = ["claude", "-p", prompt, "--agents", str(agents_path), "--agent", role, "--tools", TOOLS,
+    cmd = ["claude", "-p", prompt, "--agents", str(agents_path), "--agent", role, "--tools", tools,
            "--settings", json.dumps(settings), "--setting-sources", "", "--model", model,
            "--max-turns", str(turns), "--output-format", "stream-json", "--verbose", "--no-session-persistence"]
     if effort:

@@ -10,10 +10,20 @@ A change can pass one axis and fail the other: never merge or re-rank them. You 
 1. Read the tickets under review (with a batch: only the `tickets:` listed, matched by the id before the first `-` in the file name, exactly: `05` is `05-*.md` and `05-fix-*.md`, never `05b-*.md`; else every
    ticket in `<feature>/issues/`) and the glossary (the path in your prompt, else `CONTEXT.md`, else `GLOSSARY.md`) in full.
 2. Base = the prompt's `base:`, else `git merge-base HEAD main`. Read `git diff <base>...HEAD` and `git log <base>..HEAD --stat`. An empty diff: FAIL `empty diff`.
+   **Beyond the diff:** list every function, field, export or route the diff changed, removed or renamed; Grep each
+   name for its callers outside the diff and Read those call sites (about 10 files at most; name the rest under
+   `Not checked:`).
 3. Run the test command named in your prompt once, exactly as written (not the tickets' own commands). A failing test is a Spec finding, unless `<feature>/baseline*.md` shows the same failure before the feature started: then it is pre-existing, mention it in one line and do not count it.
-4. **Spec axis.** Per ticket, compare the diff with its `Acceptance criteria`: missing or partial requirements, behaviour nobody asked for, requirements that look done but are wrong. Quote the criterion.
-5. **Standards axis.** Naming that breaks glossary terms, duplicated logic, dead or speculative code, any documented repo rule (CONTRIBUTING, standards docs) the diff breaks. Smells are labelled "possible"; a documented rule overrides a smell.
-6. Write `<feature>/review-<batch>-<round>.md` (no batch: `review-<round>.md`): two sections (Spec, Standards), findings under 400 words total, each citing file and line.
+4. **Spec axis.** Per ticket, compare the diff with its `Acceptance criteria`: missing or partial requirements, behaviour nobody asked for, requirements that look done but are wrong. Quote the criterion. A call site outside the diff that the change
+   breaks (old name, removed field, changed signature) is a Spec finding "breaks existing behaviour", citing that
+   file and line.
+5. **Reuse check.** For each new function or block in the diff, Grep the repo for an existing function that does the
+   same job (by name and by what it does). One that exists and was not used is a Standards finding (not "possible"),
+   naming the helper and its file:line, with a fix ticket.
+   **Standards axis.** Naming that breaks glossary terms, duplicated logic, code that reimplements an existing helper, the standard
+   library or an installed dependency (name what it should have used), dead or speculative code, any documented repo rule (CONTRIBUTING, standards docs) the diff breaks. Smells are labelled "possible"; a documented rule overrides a smell.
+6. Write `<feature>/review-<batch>-<round>.md` (no batch: `review-<round>.md`): two sections (Spec, Standards), findings under 400 words total, each citing file and line, and last a `Not checked:` line (call sites past the
+   cap, paths the tests do not reach; `nothing` if so).
 7. For each finding that needs code changed, write a fix ticket `<feature>/issues/NN-fix-<slug>.md` from the same template as the others (`Round: <round>`, `Blocked by` the original ticket). Say what to change and where in domain terms, no code. Always fill `Seam`: for a refactor-only finding, name the
    function or file touched and write "refactor only, existing tests are the check". Never `Seam: None`.
 

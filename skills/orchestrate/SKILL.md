@@ -1,7 +1,7 @@
 ---
 name: orchestrate
 description: Run dev, reviewer, docs workers on tickets; verify results.
-version: 0.7.0
+version: 0.8.0
 author: hermes-dev-team contributors
 license: MIT
 platforms: [linux, macos, windows]
@@ -42,6 +42,7 @@ Load a reference with `skill_view(name="orchestrate", file_path="references/<fil
 | `config.md` | other `.team.json` keys, worker rules files, or a RESULT with `backend=hermes` / `ERROR no Hermes profile` |
 | `browser-projects.md` | the project has a browser UI |
 | `changing-skills.md` | before patching this skill or `claude-p-role-workers` |
+| `research.md` | the user asks how some code works, or whether a repo or library is worth learning or using |
 
 ## Procedure
 
@@ -71,7 +72,7 @@ Load a reference with `skill_view(name="orchestrate", file_path="references/<fil
    `progress:` path from the `START` line, then end your turn; never `process wait` (it blocks heartbeats). Answer a
    heartbeat in one short line with no tool calls. Act only on the exit notice. Same dispatch for steps 8 and 9.
 5. **Read the one RESULT line**: `RESULT dev PASS <sha> | ...` or `RESULT dev FAIL <reason> | ...`, plus any denied
-   calls. Exit 0 = PASS and the guards held (main unmoved, branch unchanged, no history rewrite, no protected file
+   calls, and show the user the ticket's `Not checked:` line. Exit 0 = PASS and the guards held (main unmoved, branch unchanged, no history rewrite, no protected file
    changed, nothing pushed). Never trust a bare `claude` exit code: it is 0 even when a worker gives up.
    **FAIL with uncommitted work** (`work uncommitted`, or a dirty `git status --short`): never re-dispatch first (the
    dev refuses a dirty tree). Show the user `git status --short`, `git diff --stat` and the reason; they commit or
@@ -85,6 +86,7 @@ Load a reference with `skill_view(name="orchestrate", file_path="references/<fil
    `python -u KIT/run-worker.py reviewer "feature: .scratch/<feature> batch: <b> tickets: NN,NN base: <sha> round: <n>"`.
    `base` = the commit before the batch: `git merge-base HEAD main` for batch 1, else the HEAD recorded when the
    previous batch passed (or the merge commit `sync-main` printed); write it into `batches.md`.
+   Show the user the review's `Not checked:` line.
    PASS: run each ticket's `Verify` (if any), set the tickets `done`, record HEAD as the next base, back to step 3.
    FAIL: it wrote `review-<b>-<n>.md` and fix tickets; dispatch them (step 4), add them to `tickets:`, review again with
    round n+1 and the same base. Never dispatch round 3: ask the user.

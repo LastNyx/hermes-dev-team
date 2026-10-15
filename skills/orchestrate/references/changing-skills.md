@@ -23,5 +23,12 @@ The planner loads all of SKILL.md every session, so its size is paid on every pr
 - Moving text into a reference is a move, not a rewrite: keep each rule's wording, so the CHANGELOG can say "moved,
   not changed". Mark the CHANGELOG entry **re-copy** and tell the user to start a new planner session.
 - After a split, confirm a reference loads: `skill_view(name="orchestrate", file_path="references/<file>")`.
+- Then test the skill TEXT with a real planner, not just the scripts: build a throwaway workspace that hits the
+  triggers you moved (e.g. `shared: true`, a red test on main, a ticket that deletes a file), and run
+  `hermes chat --query-file <prompt> -Q --format stream-json -s orchestrate -t skills,terminal,file --max-turns 40
+  --source tool --in <repo>` with a prompt that bounds the steps, says "where the skill says ask or wait, do not
+  act; write the question instead", forbids dispatch, and asks for the final approval message. Parse the JSONL for
+  `skill_view` file_paths and the commands run, check git state (main unmoved, nothing committed into the repo), then
+  delete the workspace. It takes several minutes, so run it as a background terminal with notify.
 - To rewrite SKILL.md wholesale, write the new text to the scratch dir and copy it over the linked file; `write_file`
   refuses to overwrite a file it last saw only partially.

@@ -8,10 +8,23 @@ You are on the feature branch already. Never switch branches, merge, push, or re
 1. Read the ticket. Run `git status --short`: if the tree is dirty, FAIL `dirty tree`.
 2. Read `docs/dev-notes.md` and `.scratch/dev-notes.md` (in the scratch folder) if they exist: they hold what earlier runs learned. Use the ticket's `Terms` words for every new name. Do not read the glossary (CONTEXT.md or GLOSSARY.md).
 3. Write ONE test at the ticket's `Seam`, through the public interface. Run the ticket's `Test command`; it must fail for the right reason (red). If the test command cannot run a test (typecheck or lint only), write the code first, then make sure the command passes; say so in `## Result`.
-4. Write the least code that passes. Run the `Test command` again (green).
+4. **Search before writing.** For each thing the code must do (format money, parse a date, call the API, validate
+   input), Grep the repo for an existing function that already does it (names and the words in the ticket). Use what
+   you find (see "Reuse first"); name what you reused or found nothing for in `## Result`.
+   Then write the least code that passes. Run the `Test command` again (green).
 5. `git add` each file you changed (one per call), then `git commit -m "<ticket title> (<ticket file name>)"`.
 6. Append up to 3 one-line facts you had to work out (how tests run, where code lives, gotchas) to `.scratch/dev-notes.md`. Skip what the notes already say.
-7. Append `## Result` to the ticket: commit SHA (`git log -1 --format=%h`), test output in one line, notes added. 15 lines or fewer.
+7. Append `## Result` to the ticket: commit SHA (`git log -1 --format=%h`), test output in one line, notes added, and
+   last a `Not checked:` line (what you did not run or verify, e.g. callers outside the test, other platforms; `nothing`
+   if so). 15 lines or fewer.
+
+## Reuse first (how to build, never what)
+
+Build everything the ticket asks; scope was settled before the ticket was cut, so never drop or add a feature. For
+HOW, take the first option that works: 1. something this codebase already has (a helper, component, pattern: Grep
+before writing), used the way the surrounding code uses it; 2. the standard library or a platform feature; 3. a
+dependency that is already installed (never add one: package files are denied); 4. one line a reader gets at a
+glance; 5. otherwise the minimum code. Never cut validation, error handling, security or accessibility to get there.
 
 ## Test rules
 

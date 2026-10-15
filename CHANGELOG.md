@@ -5,6 +5,30 @@ mark an entry **action** when another machine must do something (re-run `link-sk
 
 Format: version, date, then one line per change, naming the file.
 
+## 0.13.0 - 2026-10-15
+
+Ideas from github.com/DietrichGebert/ponytail (MIT; not installed), and a researcher role.
+
+- `kit/roles/dev.md`: "Reuse first" (codebase, stdlib, installed dependency, one line, minimum code; never drop or add
+  scope) and a "search before writing" step; `## Result` ends with `Not checked:`.
+- `kit/roles/reviewer.md`: reads beyond the diff (callers of every changed, removed or renamed symbol, about 10 files);
+  a break there is a Spec finding "breaks existing behaviour"; a reuse check (an existing helper not used is a
+  Standards finding); the review ends with `Not checked:`. `kit/run-worker.py`: reviewer max turns 25 -> 35.
+- **Researcher** (new): `kit/roles/researcher.{md,json}`, read-only, code only, Claude backend only (Hermes refused),
+  Sonnet 40 turns. Prompt `questions: <file> out: <file> source: <folder>`; the launcher grants Read on the source,
+  Edit on the one findings file, `git -C <source> log/show`; `--web` adds WebFetch/WebSearch for one run. Runs on the
+  main branch too (it never commits).
+- `kit/research.py` (new): the research home (`HDT_RESEARCH_HOME`, else `~/research`): `init`, `clone`, `topic`,
+  `done`, `list`. Clones are git-ignored and never run.
+- `kit/roles/_tool-rules.md`: Glob patterns start with `**/`; one empty Glob never proves absence (measured blind spot).
+- **re-copy** `skills/orchestrate` 0.8.0: `references/research.md` (questions first, where findings go, the planner
+  recommends); steps 5 and 8 show the user the `Not checked:` lines.
+- `skills/claude-p-role-workers`, `skills/orchestrate/references/changing-skills.md`: lessons on testing guards through
+  `main()`, testing skill text with a headless planner, grilling with concrete examples, one release per design.
+- `tests/ponytail_ideas.py` (9 checks, 2 real runs), `tests/researcher.py` (19 checks, 1 real run; `--ponytail` 26).
+- **action:** start a new planner session to load orchestrate 0.8.0. Optional: set `HDT_RESEARCH_HOME`, then
+  `python KIT/research.py init`.
+
 ## 0.12.4 - 2026-10-15
 
 - `tests/push_guard.py`: 3 more checks through the launcher's real `main()` (scripted worker): 10/10.
