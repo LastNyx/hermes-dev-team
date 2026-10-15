@@ -109,7 +109,7 @@ Commits never get a Co-Authored-By trailer.
 If other people commit to the repo with their own workflow, the kit stays your personal workflow: set
 `"shared": true` in a `.team.json` in the PARENT folder (`"repos": {"<repo>": {...}}`), keep glossary and notes in the
 scratch folder, run `python KIT/scratch.py baseline <feature>` before the first ticket, and bring main in only between
-batches with `python KIT/scratch.py sync-main --apply`. See the orchestrate skill, "Shared repo".
+batches with `python KIT/scratch.py sync-main --apply`. See the orchestrate skill's `references/shared-repo.md`.
 
 ## Resume and switching machines
 

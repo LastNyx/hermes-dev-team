@@ -300,24 +300,50 @@ def remote_refs():
     return out
 
 
+def tracking_refs():
+    return set((git("for-each-ref", "--format=%(refname)", "refs/remotes") or "").split())
+
+
+def local_branches():
+    return set((git("for-each-ref", "--format=%(refname:short)", "refs/heads") or "").split())
+
+
 def snapshot(protected):
     return {"main": git("rev-parse", "main"), "branch": git("branch", "--show-current"), "head": git("rev-parse", "HEAD"),
-            "protected": sorted(protected_changes(None, protected)), "remotes": remote_refs()}
+            "protected": sorted(protected_changes(None, protected)), "remotes": remote_refs(),
+            "tracking": tracking_refs(), "locals": local_branches()}
 
 
-def pushed_from_here(before, after):
-    """True when a remote ref changed to a commit that exists in this clone, i.e. it was pushed from here.
+def parse_ls_remote(out):
+    refs = {}
+    for line in (out or "").splitlines():
+        if "\t" in line:
+            sha, ref = line.split("\t", 1)
+            refs[ref] = sha
+    return refs
 
-    A teammate's push points at commits this clone has never fetched (the launcher does not fetch during a run), so in
-    a shared repo it no longer fails the worker. `before`/`after` are `git ls-remote` outputs.
+
+def pushed_from_here(remote, before, after, gone_tracking=frozenset(), locals_=frozenset()):
+    """True when the remote's refs changed in a way only this clone can have caused.
+
+    - A ref added or moved to a commit that exists in this clone. A teammate's push points at commits this clone has
+      never fetched (the launcher does not fetch during a run), so in a shared repo it does not fail the worker.
+    - A branch deleted on the remote whose remote-tracking ref also vanished from this clone during the run (`git push
+      <remote> --delete <b>` removes both), or whose name is a branch of this clone (a deletion by URL leaves the
+      tracking ref; the feature branch and main are always local). A teammate deleting their own merged branch passes.
+    `before`/`after` are `git ls-remote` outputs. Known gap: a teammate moving a ref to a commit this clone already has
+    (e.g. fast-forwarding main to a commit fetched earlier) reads as pushed from here: a false FAIL, never a miss.
     """
-    old = set(before.splitlines())
-    for line in after.splitlines():
-        if line in old or "\t" not in line:
-            continue
-        sha = line.split("\t", 1)[0]
-        if subprocess.run(["git", "cat-file", "-e", f"{sha}^{{commit}}"], capture_output=True).returncode == 0:
+    b, a = parse_ls_remote(before), parse_ls_remote(after)
+    for ref, sha in a.items():
+        if b.get(ref) != sha and subprocess.run(["git", "cat-file", "-e", f"{sha}^{{commit}}"],
+                                                 capture_output=True).returncode == 0:
             return True
+    for ref in b.keys() - a.keys():
+        if ref.startswith("refs/heads/"):
+            name = ref[len("refs/heads/"):]
+            if name in locals_ or f"refs/remotes/{remote}/{name}" in gone_tracking:
+                return True
     return False
 
 
@@ -331,8 +357,10 @@ def guards_after(snap, protected):
     if touched:
         g.append("test-config-changed:" + "+".join(touched[:3]))
     now = remote_refs()                                        # measured: a hermes worker pushed when not told not to
+    gone = snap.get("tracking", set()) - tracking_refs()
+    locals_ = snap.get("locals", set()) | local_branches()
     pushed = [r for r, before in snap["remotes"].items() if before is not None and now.get(r) not in (None, before)
-              and pushed_from_here(before, now.get(r))]
+              and pushed_from_here(r, before, now.get(r), gone, locals_)]
     if pushed:
         g.append("pushed:" + "+".join(pushed))
     return g

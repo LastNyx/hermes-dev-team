@@ -11,6 +11,7 @@ with local bare repos as remotes, so nothing touches a real project or GitHub, a
 | `python tests/resume_e2e.py` | `scratch.py` (init, commit, decide, resume, stop, switch) and the worker lock, single repo, two clones as two machines plus a third for a clean fast-forward | 2 real `claude -p` dev runs (Sonnet, about $0.20 list) | about 1.5 min | 33 |
 | `python tests/resume_workspace.py` | the same for a multi-repo workspace (two repos, scratch in the workspace) | none | seconds | 6 |
 | `python tests/shared_repo.py` | a shared repo: a teammate pushes to main during a dev run, a known-broken suite on main (`baseline`), `sync-main` (refused mid-batch, dry run, merge, conflict + abort), batch diffs after a sync, a teammate's commit on the feature branch, an orphaned worker after a launcher SIGKILL | 3 real `claude -p` runs (2 dev, 1 reviewer; Sonnet) | about 2 min | 24 |
+| `python tests/push_guard.py` | the launcher's `guard:pushed`: teammate pushes and branch deletions pass; the worker's push, new branch, and branch deletion (by remote name and by URL) fail it | none | seconds | 7 |
 | `python tests/existing_project.py` | every step of [EXISTING-PROJECTS.md](../EXISTING-PROJECTS.md): a pre-0.11.0 `.scratch/` turned into a repo, an old copy on a second machine moved aside, and the wrong way (plain `init` on a second machine -> `DIVERGED`, nothing merged) | none | seconds | 12 |
 
 Both print one `PASS`/`FAIL` line per check and end with `<n>/<total> checks passed`; exit 0 only when all pass.
@@ -54,6 +55,7 @@ or the role JSON files. Add a row to "Results" below with the date, OS and numbe
 | 2026-10-15 | same | launcher SIGKILLed mid-run (0.11.1, ad hoc) | found a bug | the worker kept running (own session) and the lock read as stale, so a second dispatch STARTED beside it; fixed in 0.12.0 (`read_lock` checks the worker pid too) |
 | 2026-10-15 | same | `shared_repo.py` (0.12.0) | 24/24 | dev PASS while a teammate pushed main; reviewer PASS, called the broken legacy test pre-existing (baseline) and never mentioned the teammate's file |
 | 2026-10-15 | same | `resume_e2e.py`, `resume_workspace.py`, `existing_project.py` (0.12.0) | 33/33, 6/6, 12/12 | |
+| 2026-10-15 | Windows 11, git-bash, Python 3.14 | `push_guard.py` (0.12.3) | 7/7 | the 0.12.2 guard failed 2/7: a worker deleting a remote branch passed |
 
 macOS: not run.
 

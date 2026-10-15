@@ -5,6 +5,20 @@ mark an entry **action** when another machine must do something (re-run `link-sk
 
 Format: version, date, then one line per change, naming the file.
 
+## 0.12.3 - 2026-10-15
+
+- `kit/run-worker.py guard:pushed`: a remote branch DELETED during the run fails the worker again when this clone's
+  tracking ref for it vanished (`git push <remote> --delete`) or it is a local branch (deletion by URL). 0.12.0 checked
+  only added/moved refs, so a deletion passed. A teammate deleting their own branch still passes.
+- `tests/push_guard.py` (new, no model): 7 checks; the 0.12.2 guard fails 2 of them (both deletions).
+- `kit/scratch.py baseline`: a test command over `--timeout` prints `BASELINE STOP`, not a traceback.
+- **re-copy** `skills/orchestrate` 0.7.0: split by trigger. SKILL.md keeps the core loop (steps 0-11, cost log,
+  pitfalls), 3460 -> about 1400 words. Moved, not changed, into `references/`: `tickets.md` (step 2: header, Test
+  command vs Verify, no deletions, batches, fix tickets, dependencies), `workspace.md`, `shared-repo.md`,
+  `switching.md` (switching, force-stop, lock, orphaned worker), `config.md` (`.team.json` keys, worker rules, Hermes
+  backend), `browser-projects.md`, `changing-skills.md`. The skill names when to load each.
+- **action:** linked machines get `references/` through the junction; start a new planner session to load 0.7.0.
+
 ## 0.12.2 - 2026-10-15
 
 - `skills/orchestrate` 0.6.1, step 2: tickets never ask the dev to delete a file (its allow-list has no `rm` or

@@ -236,7 +236,10 @@ def cmd_baseline(a):
     if ahead not in ("0", None) and not a.force:
         print(f"BASELINE STOP the branch already has {ahead} commit(s) beyond {mb}; run it before the first ticket "
               "(or --force to record the current state)"); return 1
-    r = subprocess.run(cmd, shell=True, cwd=repo, capture_output=True, text=True, env=ENV, timeout=a.timeout)
+    try:
+        r = subprocess.run(cmd, shell=True, cwd=repo, capture_output=True, text=True, env=ENV, timeout=a.timeout)
+    except subprocess.TimeoutExpired:
+        print(f"BASELINE STOP `{cmd}` ran longer than {a.timeout}s; pass --timeout <seconds>"); return 1
     tail = "\n".join((r.stdout + r.stderr).strip().splitlines()[-a.lines:])
     p = fd / ("baseline.md" if len(repos) <= 1 else f"baseline-{repo.name}.md")
     p.write_text(f"# Baseline: {a.feature} ({repo.name})\n\nBefore the first ticket, at {git(repo, 'rev-parse', '--short', 'HEAD')}: "
