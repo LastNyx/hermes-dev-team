@@ -5,6 +5,13 @@ mark an entry **action** when another machine must do something (re-run `link-sk
 
 Format: version, date, then one line per change, naming the file.
 
+## 0.12.1 - 2026-10-15
+
+- `kit/roles/docs.md`: updates every changelog the project rules name (file, language, audience), else the plain
+  `CHANGELOG.md` entry as before.
+- `kit/run-worker.py`: `.team.json` `"docs_edit": ["<repo-relative path>"]` adds Edit permission on those files for
+  the docs worker only, and names them in its prompt (for a changelog outside README/CHANGELOG/docs).
+
 ## 0.12.0 - 2026-10-15
 
 - **Shared repos** (other people commit to the repo, with their own workflow): `"shared": true` in the config.

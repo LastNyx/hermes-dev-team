@@ -48,6 +48,8 @@ files or `.team.json` (they decide what the test command runs); the planner make
 The launcher pastes the project's `AGENTS.md` and `CLAUDE.md` (whichever exist, in that order; `@` imports inlined,
 each file once) into every worker's prompt; `"rules": "<file or list>"` replaces that default. START shows `rules=...`.
 The dev worker takes its test command from the ticket; the reviewer uses `test` from `.team.json`.
+Extra changelogs: name each one and its rules (file, language, audience) in `AGENTS.md`; the docs worker follows them.
+It may edit only README, `CHANGELOG.md` and `docs/`, so list any other file in `"docs_edit": ["<repo-relative path>"]`.
 
 A long rules file is cut at `rules_max_chars` (default 40000); point `rules` at a short file instead.
 `python KIT/tickets.py <feature>` checks tickets and prints the approval table; `--next` lists what can run next.

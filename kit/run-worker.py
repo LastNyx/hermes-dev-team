@@ -421,6 +421,10 @@ def main():
     # measured: Edit(**/<name>) denies the file at the root and in subfolders, for both Edit and Write
     settings["permissions"].setdefault("deny", []).extend(f"Edit(**/{p})" for p in protected)
     prompt = a.prompt
+    docs_edit = list(cfg.get("docs_edit") or []) if a.role == "docs" else []
+    if docs_edit:                                              # repo-relative files the project's AGENTS.md names
+        settings["permissions"]["allow"] += [f"Edit(./{p.removeprefix('./')})" for p in docs_edit]
+        prompt += "\nYou may also edit these files (the project's rules say what goes in them): " + ", ".join(docs_edit)
     outside = scratch != repo / ".scratch"
     if outside or backend == "hermes":                         # hermes: absolute paths, its cwd is not the repo
         for key in ("ticket", "feature"):
