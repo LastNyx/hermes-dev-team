@@ -5,6 +5,12 @@ mark an entry **action** when another machine must do something (re-run `link-sk
 
 Format: version, date, then one line per change, naming the file.
 
+## 0.12.4 - 2026-10-15
+
+- `tests/push_guard.py`: 3 more checks through the launcher's real `main()` (scripted worker): 10/10.
+- `docs/testing.md`: a headless Hermes planner ran orchestrate 0.7.0 steps 0-2 on a shared toy repo and loaded the
+  right references on its own (results table).
+
 ## 0.12.3 - 2026-10-15
 
 - `kit/run-worker.py guard:pushed`: a remote branch DELETED during the run fails the worker again when this clone's

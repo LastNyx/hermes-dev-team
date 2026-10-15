@@ -44,6 +44,7 @@ gets the allow-list, so Claude stays the default backend; a Hermes worker profil
 11. Haiku handled a small docs job; the user's default for test and real workers is Sonnet at medium effort (subscription limits): pass `--model sonnet --effort medium`, or set `.team.json` `"models"` and `"effort"` (string or per-role map). Never let a worker silently run on the planner's Opus.
 12. To test denials, frame forbidden actions as plain chores. A prompt framed as "red-team" was refused and tested nothing.
 13. **Every guard gets a positive and a negative toy run.** Example: for the push guard, push from a second shell (a script with `( sleep 12; git push ... ) &`, since the terminal tool rejects inline `&`) while the worker runs and expect `FAIL guard:pushed`. Use a local bare repo (`git init --bare remote.git`, remote added by native `C:/...` path) so a push can really land.
+    **Narrowing a guard** (to stop false FAILs) is where misses creep in: list every form of the guarded action first (push: moved ref, new branch, `--delete`, push by URL) and check each against both the old and the new code. Prefer a no-model test that imports the launcher and calls `snapshot()`/`guards_after()` over a bare remote plus a teammate clone; a guard that only compares changed refs misses deletions, and a push by URL leaves the remote-tracking ref in place, so tracking refs alone cannot detect it.
 14. **Toy test runners must be able to go red.** A runner that tests a function only `if hasattr(...)` passes before the code exists, and a correct dev worker FAILs "no red step". Use a runner that executes every `test_*.py` and tell the ticket to write `test_<x>.py`.
 
 ## Known hole
@@ -98,6 +99,9 @@ The dispatch is the same command for both; the planner never picks the backend.
   repo's `docs/benchmarks.md`; the user reads it on the other machine after `git pull`.
 - Do not claim one backend is cheaper from toy runs: say the mechanism (fewer calls, smaller system prompt), n, and
   that cache reads are billed at a fraction; the real comparison is `dev` vs `dev@hermes` in `costs.py` on a real ticket.
+- Reviewing a kit update pulled from the other machine: read `git diff <old>..HEAD`, run the no-model tests
+  (`tests/*.py` without model calls) on this OS, and look hardest at guards that were relaxed and at OS-specific
+  process code measured on one OS only. Report findings ranked, with a recommended next step, before changing code.
 - Before every commit in the team repo, run `git status --short` and read any `skills/` diff you did not write: a
   background skill review edits linked skills in place, and `git add -A` silently ships its changes.
 - To judge a new backend's enforcement, run the forbidden-chores ticket twice: once with the forbidden list in the

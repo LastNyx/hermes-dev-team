@@ -80,6 +80,42 @@ def run():
     g = guard(lambda: sh(me, "push", "-q", bare, "--delete", "mate-b"))
     check("known gap: worker deletes a teammate's branch by URL -> not caught", g == [], g)
 
+    # ---- through the launcher: main() runs for real (config, lock, snapshot, guards, RESULT line, runs.log); only
+    # the model is replaced by a scripted worker that does the git action and claims PASS.
+    (me / ".team.json").write_text('{"test": "git status"}'); (me / ".gitignore").write_text(".scratch/\n")
+    sh(me, "add", "-A"); sh(me, "commit", "-q", "-m", "config"); sh(me, "push", "-q", "origin", "feat")
+    sh(me, "push", "-q", "origin", "main:old-me2")
+    sh(mate, "push", "-q", "origin", "main:mate-c"); sh(me, "fetch", "-q")
+
+    def launch(action):
+        def fake_worker(cmd, progress_path, env=None, lock=None):
+            pathlib.Path(progress_path).write_text("")
+            action()
+            return {"type": "result", "subtype": "success", "result": "RESULT: PASS done", "num_turns": 1,
+                    "usage": {}, "_exit": 0}
+        rw.stream_worker = fake_worker
+        argv, out = sys.argv, []
+        sys.argv = ["run-worker.py", "dev", "do the ticket", "--backend", "claude"]
+        import contextlib, io
+        buf = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(buf):
+                rc = rw.main()
+        finally:
+            sys.argv = argv
+        lines = buf.getvalue().strip().splitlines()
+        return rc, next((l for l in reversed(lines) if l.startswith("RESULT")), "")
+
+    rc, line = launch(lambda: sh(mate, "push", "-q", "origin", "--delete", "mate-c"))
+    check("launcher: teammate deletes a branch mid-run -> RESULT dev PASS, exit 0",
+          rc == 0 and line.startswith("RESULT dev PASS"), line)
+    rc, line = launch(lambda: sh(me, "push", "-q", "origin", "--delete", "old-me2"))
+    check("launcher: worker runs `git push origin --delete` -> RESULT dev FAIL ... guard:pushed, exit 1",
+          rc == 1 and "FAIL" in line and "pushed:origin" in line, line)
+    log = (me / ".scratch/runs.log").read_text(encoding="utf-8").strip().splitlines()
+    check("launcher: runs.log records both runs, the second as FAIL",
+          len(log) == 2 and "PASS" in log[0] and "FAIL" in log[1], "\n".join(log))
+
 
 def main():
     cwd = os.getcwd()

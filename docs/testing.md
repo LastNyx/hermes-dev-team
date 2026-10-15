@@ -11,7 +11,7 @@ with local bare repos as remotes, so nothing touches a real project or GitHub, a
 | `python tests/resume_e2e.py` | `scratch.py` (init, commit, decide, resume, stop, switch) and the worker lock, single repo, two clones as two machines plus a third for a clean fast-forward | 2 real `claude -p` dev runs (Sonnet, about $0.20 list) | about 1.5 min | 33 |
 | `python tests/resume_workspace.py` | the same for a multi-repo workspace (two repos, scratch in the workspace) | none | seconds | 6 |
 | `python tests/shared_repo.py` | a shared repo: a teammate pushes to main during a dev run, a known-broken suite on main (`baseline`), `sync-main` (refused mid-batch, dry run, merge, conflict + abort), batch diffs after a sync, a teammate's commit on the feature branch, an orphaned worker after a launcher SIGKILL | 3 real `claude -p` runs (2 dev, 1 reviewer; Sonnet) | about 2 min | 24 |
-| `python tests/push_guard.py` | the launcher's `guard:pushed`: teammate pushes and branch deletions pass; the worker's push, new branch, and branch deletion (by remote name and by URL) fail it | none | seconds | 7 |
+| `python tests/push_guard.py` | the launcher's `guard:pushed`: teammate pushes and branch deletions pass; the worker's push, new branch, and branch deletion (by remote name and by URL) fail it | none (the launcher's `main()` runs with a scripted worker for the last 3) | seconds | 10 |
 | `python tests/existing_project.py` | every step of [EXISTING-PROJECTS.md](../EXISTING-PROJECTS.md): a pre-0.11.0 `.scratch/` turned into a repo, an old copy on a second machine moved aside, and the wrong way (plain `init` on a second machine -> `DIVERGED`, nothing merged) | none | seconds | 12 |
 
 Both print one `PASS`/`FAIL` line per check and end with `<n>/<total> checks passed`; exit 0 only when all pass.
@@ -56,6 +56,8 @@ or the role JSON files. Add a row to "Results" below with the date, OS and numbe
 | 2026-10-15 | same | `shared_repo.py` (0.12.0) | 24/24 | dev PASS while a teammate pushed main; reviewer PASS, called the broken legacy test pre-existing (baseline) and never mentioned the teammate's file |
 | 2026-10-15 | same | `resume_e2e.py`, `resume_workspace.py`, `existing_project.py` (0.12.0) | 33/33, 6/6, 12/12 | |
 | 2026-10-15 | Windows 11, git-bash, Python 3.14 | `push_guard.py` (0.12.3) | 7/7 | the 0.12.2 guard failed 2/7: a worker deleting a remote branch passed |
+| 2026-10-15 | same | `push_guard.py` (0.12.4) | 10/10 | through `main()`: teammate deletion -> RESULT PASS exit 0; worker `push --delete` -> RESULT FAIL guard:pushed exit 1; both in runs.log |
+| 2026-10-15 | same, Hermes planner (Sonnet 5.5, headless, only `orchestrate` preloaded) | orchestrate 0.7.0 steps 0-2, ad hoc toy workspace: `shared: true`, broken test on main, a ticket that deletes a file | pass | loaded `tickets.md`, `workspace.md`, `shared-repo.md` itself; ran `baseline`; glossary left in scratch, no `docs: context`; reworded the delete ticket and asked before `git rm`; narrowed Test command; dispatched nothing, main unmoved. 11 tool calls |
 
 macOS: not run.
 
@@ -67,7 +69,7 @@ macOS: not run.
 - `sync-main` in a multi-repo workspace (tested with one repo in a workspace config only), and a real PR flow.
 - A real GitHub private remote (tests use local bare repos; auth prompts are disabled with `GIT_TERMINAL_PROMPT=0`,
   so a remote that needs a login fails the fetch and `resume` reports `fetch failed`, not synced).
-- The planner following orchestrate step 0 in a real Hermes session (the scripts were tested, not the skill text).
+- The planner past step 2 (dispatch, review, docs) on the split skill; steps 0-2 were run once (see Results).
 
 ## Earlier tests
 

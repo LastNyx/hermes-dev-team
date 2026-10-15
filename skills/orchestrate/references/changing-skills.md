@@ -11,3 +11,17 @@ Load before patching `orchestrate` or `claude-p-role-workers` (or any file under
   yes), and restore the local tree with `git restore`.
 - Matt Pocock's skills are not part of the repo: never patch them, so they can still be updated from upstream.
 - A lesson that helps every project goes into the team repo's `kit/roles/*.md` only after the user has read it.
+
+## Keeping SKILL.md small
+
+The planner loads all of SKILL.md every session, so its size is paid on every project. Check `wc -w` before adding.
+- A rule that applies only to one project shape or event (multi-repo, shared repo, switching, Hermes backend, browser
+  UI, a single step's detail) goes into the matching `references/<topic>.md`, never into the main procedure. Extend
+  an existing reference before creating one; add a new one only with a row in SKILL.md's trigger table.
+- SKILL.md keeps the core loop (steps 0-11), the cost log, and pitfalls that apply to every project; each step names
+  the reference it needs (e.g. step 2 -> `tickets.md`).
+- Moving text into a reference is a move, not a rewrite: keep each rule's wording, so the CHANGELOG can say "moved,
+  not changed". Mark the CHANGELOG entry **re-copy** and tell the user to start a new planner session.
+- After a split, confirm a reference loads: `skill_view(name="orchestrate", file_path="references/<file>")`.
+- To rewrite SKILL.md wholesale, write the new text to the scratch dir and copy it over the linked file; `write_file`
+  refuses to overwrite a file it last saw only partially.
