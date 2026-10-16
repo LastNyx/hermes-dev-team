@@ -5,7 +5,30 @@ mark an entry **action** when another machine must do something (re-run `link-sk
 
 Format: version, date, then one line per change, naming the file.
 
-## 0.13.0 - 2026-10-15
+## 0.13.1 - 2026-10-16
+
+Read-only git grants could write files. Measured (Linux, Claude Code 2.1.296, git 2.56): with `Bash(git log:*)`
+allowed, `git log --format=format:<text> --output=<path>` ran with 0 denials and wrote <path>, also under `.git/hooks/`
+although `Edit(./.git/**)` was denied; `git diff --output` and `git show --output` the same. Every role had such a
+grant. A file written into `.git/hooks/` runs on the dev's next `git commit` where git does not need the executable bit
+(Windows) or when it replaces an executable hook.
+
+- `kit/git-ro.py` (new): `log`/`diff`/`show` only; refuses `--output` (and abbreviations), `--ext-diff`, `--no-index`
+  and a diff path outside the repo (`GIT-RO STOP`, exit 2).
+- `kit/run-worker.py`: `read_only_git()` replaces each role's raw `Bash(git log|diff|show:*)` with
+  `Bash(<python> <kit>/git-ro.py <sub>:*)` and names the command in the prompt; role JSON files are unchanged.
+  New guard `git-hooks-or-config-changed`: hook files (name, mode, content; honours `core.hooksPath`) and
+  `.git/config` / `config.worktree` fingerprinted before the run and checked after it, like `guard:pushed`.
+- Researcher: no Bash at all (tool list and `researcher.json` deny). The launcher writes the source's newest 100
+  commits (`--stat`) to `<topic>/history.txt`; `kit/roles/researcher.md` reads it instead of `git -C <source> log`.
+- `kit/roles/_tool-rules.md`: `git log/diff/show` go through the wrapper the prompt names.
+- Project hooks still run on `git commit`: the project's own hooks are legitimate; a worker can no longer write one.
+- `tests/git_guard.py` (new): 26 checks no model, `--real` 3 more (old rule writes, new rule denies, wrapper works).
+- **re-copy** `skills/orchestrate` 0.8.1 (`references/research.md`: no Bash for the researcher);
+  `skills/claude-p-role-workers` rule 18 (a read-only prefix is not read-only); `TEAM.md`; `docs/design.md` 37.
+- `docs/testing.md`: rows and results; a stray blank line split the results table.
+- **action:** start a new planner session to load orchestrate 0.8.1.
+
 
 Ideas from github.com/DietrichGebert/ponytail (MIT; not installed), and a researcher role.
 

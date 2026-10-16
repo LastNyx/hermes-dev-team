@@ -24,7 +24,7 @@ Measured facts this relies on (Claude Code 2.1.296):
 - `--setting-sources ""` ignores user/project settings, so a repo's .claude/settings.json cannot widen the allow-list.
 - `Edit(path)` rules govern both Edit and Write; deny rules beat allow rules.
 """
-import argparse, datetime, fnmatch, json, os, pathlib, re, shutil, subprocess, sys, time
+import argparse, datetime, fnmatch, hashlib, json, os, pathlib, re, shutil, subprocess, sys, time
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import teamcfg  # noqa: E402
@@ -141,11 +141,48 @@ def scratch_rule(rule, scratch, repo):
     return f"{m.group(1)}({perm_path(scratch)}{m.group(2) or ''})"
 
 
+RAW_GIT_READ = re.compile(r"Bash\(git (log|diff|show)\b")
+
+
+def git_ro_cmd():
+    """The exact command prefix a worker types for read-only git (kit/git-ro.py), forward slashes."""
+    return f"{pathlib.Path(sys.executable).as_posix()} {(KIT / 'git-ro.py').as_posix()}"
+
+
+def read_only_git(settings):
+    """Swap a role's raw `Bash(git log|diff|show:*)` grants for the kit's git-ro wrapper; return the subcommands.
+
+    measured (Claude Code 2.1.296, git 2.56): with `Bash(git log:*)` allowed, `git log --format=format:<text>
+    --output=<path>` ran with 0 denials and wrote <path>, also under `.git/hooks/` although `Edit(./.git/**)` was
+    denied; `git diff --output` and `git show --output` the same. A prefix rule cannot stop a trailing flag, so the
+    flag check lives in git-ro.py.
+    """
+    perms = settings["permissions"]
+    subs = sorted({m.group(1) for r in perms["allow"] for m in [RAW_GIT_READ.match(r)] if m})
+    perms["allow"] = [r for r in perms["allow"] if not RAW_GIT_READ.match(r)]
+    perms["allow"] += [f"Bash({git_ro_cmd()} {s}:*)" for s in subs]
+    return subs
+
+
+def research_history(src, out_dir, n=100):
+    """Write the source's history (newest n commits, --stat) to <topic>/history.txt; the researcher has no Bash."""
+    path = out_dir / "history.txt"
+    r = subprocess.run(["git", "-C", str(src), "--no-pager", "log", f"-n{n}", "--stat", "--no-ext-diff", "--no-textconv",
+                        "--format=commit %h %ad %an%n    %s", "--date=short"],
+                       capture_output=True, text=True, encoding="utf-8", errors="replace",
+                       env={**os.environ, "GIT_TERMINAL_PROMPT": "0"})
+    body = (f"# git log -n{n} --stat of {src.as_posix()} (written by the launcher)\n\n" + r.stdout
+            if r.returncode == 0 else f"# {src.as_posix()} is not a git repo (or has no commits)\n")
+    path.write_text(body, encoding="utf-8")
+    return path
+
+
 def research_grants(settings, prompt, web):
-    """Researcher (B10): read the source and the questions, write ONLY the findings file, git log/show on the source.
+    """Researcher (B10): read the source and the questions, write ONLY the findings file. No Bash at all.
 
     Paths come from the prompt (`questions:`, `out:`, `source:`). Nothing else is writable: the role JSON allows no
-    Edit, and the only Bash rules added are `git -C <source> log` / `show`. Returns an error string or None.
+    Edit and the launcher runs it without the Bash tool (0.13.1: a `git log:*` grant could write files through
+    `--output`); history comes from history.txt, which the launcher writes. Returns an error string or None.
     """
     q, out, src = (prompt_path(prompt, k) for k in ("questions", "out", "source"))
     if not (q and out and src):
@@ -157,22 +194,22 @@ def research_grants(settings, prompt, web):
     if out.parent.resolve() != q.parent.resolve():
         return "out: must sit next to questions: (one topic folder)"
     perms = settings["permissions"]
+    hist = research_history(src, out.parent)
     perms["allow"] += [f"Read({perm_path(src)}/**)", f"Read({perm_path(q)})", f"Read({perm_path(out)})",
-                       f"Edit({perm_path(out)})"]
-    perms["allow"] += [f"Bash(git -C {src.as_posix()} {c}:*)" for c in ("log", "show")]
+                       f"Read({perm_path(hist)})", f"Edit({perm_path(out)})"]
     if web:
         perms["allow"] += ["WebFetch", "WebSearch"]
     return None
 
 
 def research_prompt(prompt, web):
-    """Rewrite the three paths absolute and tell the worker the one Bash form it may use."""
+    """Rewrite the three paths absolute and tell the worker where the source's history is."""
     for key in ("questions", "out", "source"):
         pp = prompt_path(prompt, key)
         prompt = re.sub(rf"{key}:\s*\S+", lambda _m, k=key, v=pp: f"{k}: {v.as_posix()}", prompt, count=1)
-    src = prompt_path(prompt, "source").as_posix()
-    return (prompt + f"\nGit history, if a question needs it, only as: `git -C {src} log ...` or `git -C {src} show ...`"
-            " (exactly that path, forward slashes)." + ("\nweb: on" if web and "web:" not in prompt else ""))
+    hist = (prompt_path(prompt, "out").parent / "history.txt").as_posix()   # type: ignore[union-attr]  # checked
+    return (prompt + f"\nGit history of the source (newest 100 commits, --stat) is in {hist}; there is no Bash."
+            + ("\nweb: on" if web and "web:" not in prompt else ""))
 
 
 def tool_line(name, inp):
@@ -344,10 +381,39 @@ def local_branches():
     return set((git("for-each-ref", "--format=%(refname:short)", "refs/heads") or "").split())
 
 
+def git_state():
+    """Fingerprint of what makes git run code: every hook file (name, mode, content) and the repo's config files.
+
+    Covers the hooks folder git uses (`git rev-parse --git-path hooks`, which honours core.hooksPath), the common
+    `.git/config` and a worktree's `config.worktree`. A change during a run means a worker wrote there (0.13.1).
+    """
+    out = {}
+    hooks = git("rev-parse", "--git-path", "hooks")
+    common = git("rev-parse", "--git-common-dir")
+    gdir = git("rev-parse", "--git-dir")
+    files = []
+    if hooks and pathlib.Path(hooks).is_dir():
+        files += [("hooks/" + p.relative_to(hooks).as_posix(), p) for p in sorted(pathlib.Path(hooks).rglob("*"))
+                  if p.is_file()]
+    for label, base in (("config", common), ("config.worktree", gdir)):
+        if base and (pathlib.Path(base) / label).is_file():
+            files.append((label, pathlib.Path(base) / label))
+    for label, p in files:
+        try:
+            out[label] = (oct(p.stat().st_mode & 0o777), hashlib.sha256(p.read_bytes()).hexdigest())
+        except OSError:
+            out[label] = None
+    return out
+
+
+def git_state_changes(before, after):
+    return sorted(k for k in set(before) | set(after) if before.get(k) != after.get(k))
+
+
 def snapshot(protected):
     return {"main": git("rev-parse", "main"), "branch": git("branch", "--show-current"), "head": git("rev-parse", "HEAD"),
             "protected": sorted(protected_changes(None, protected)), "remotes": remote_refs(),
-            "tracking": tracking_refs(), "locals": local_branches()}
+            "tracking": tracking_refs(), "locals": local_branches(), "git_state": git_state()}
 
 
 def parse_ls_remote(out):
@@ -392,6 +458,9 @@ def guards_after(snap, protected):
     touched = [n for n in protected_changes(snap["head"], protected) if n not in snap["protected"]]
     if touched:
         g.append("test-config-changed:" + "+".join(touched[:3]))
+    hooked = git_state_changes(snap.get("git_state", {}), git_state()) if "git_state" in snap else []
+    if hooked:                                                 # a hook or git config written during the run
+        g.append("git-hooks-or-config-changed:" + "+".join(hooked[:3]))
     now = remote_refs()                                        # measured: a hermes worker pushed when not told not to
     gone = snap.get("tracking", set()) - tracking_refs()
     locals_ = snap.get("locals", set()) | local_branches()
@@ -513,11 +582,17 @@ def main():
         prompt += (f"\nThe scratch folder is {scratch.as_posix()}: wherever your instructions say `.scratch/`, use that"
                    " folder (absolute paths).")
     tools = TOOLS
+    git_subs = read_only_git(settings)
+    if git_subs:
+        prompt += (f"\nRead-only git ({', '.join(git_subs)}) only through the kit wrapper, exactly: `{git_ro_cmd()} "
+                   f"<{'|'.join(git_subs)}> <args>` (e.g. `{git_ro_cmd()} {git_subs[0]} --stat`). Plain `git "
+                   f"{git_subs[0]}` is denied. Options that write a file (`--output`) are refused.")
     if a.role == "researcher":
         err = research_grants(settings, a.prompt, a.web)
         if err:
             print(f"RESULT researcher ERROR {err}"); return 2
         prompt = research_prompt(a.prompt, a.web)
+        tools = TOOLS.replace(",Bash", "")                    # 0.13.1: no Bash; history.txt instead
         if a.web:
             tools += ",WebFetch,WebSearch"
     glossary = cfg.get("glossary")

@@ -2,6 +2,8 @@
 
 - Bash runs exactly ONE command per call: no `cd`, `&&`, `;`, `|`, redirects, or subshells. You are already in the repo root.
 - Read files with Read, Glob, Grep. Never use cat, ls, head, or find.
+- Wherever these instructions say `git log`, `git diff` or `git show`, run it through the read-only git wrapper your
+  prompt names (same arguments after the subcommand). Plain `git log/diff/show` is denied.
 - Glob patterns start with `**/` (e.g. `**/benchmarks/**`), never with a folder name: measured on Windows, Glob with a
   `path` and a pattern like `benchmarks/**/*` returns nothing although the folder exists. One empty Glob never proves
   a file or folder is absent: confirm with a second pattern or a Read before saying so.

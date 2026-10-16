@@ -8,7 +8,8 @@
   ],
   "deny": [
    "Read(./.scratch/runs/**)",
-   "Edit(./.scratch/.git/**)"
+   "Edit(./.scratch/.git/**)",
+   "Bash"
   ]
  },
  "includeCoAuthoredBy": false,

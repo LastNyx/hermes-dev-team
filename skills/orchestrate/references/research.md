@@ -37,5 +37,6 @@ Research that is not about code (a market, a person, a product) is not its job: 
   questions either.
 - A finding that says a file or folder is absent is the weakest kind: Glob has measured blind spots on Windows.
   Check it yourself before repeating it.
-- The researcher may run only `git -C <source> log/show`; anything else (installing, running tests, benchmarks) is
+- The researcher has no Bash (0.13.1); history comes from `history.txt`, which the launcher writes. Anything else
+  (installing, running tests, benchmarks) is
   denied. If a question needs a run, say so to the user; do not widen the role.

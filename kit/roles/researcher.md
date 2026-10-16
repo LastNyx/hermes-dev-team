@@ -19,14 +19,15 @@ You answer a fixed list of questions about source code, read-only, and write one
 ## Procedure
 
 1. Read the questions file. Glob and Grep the source folder to find the core (entry points, the main prompt or module,
-   config), then Read what each question needs. Use `git -C <source> log` / `show` only for history questions.
+   config), then Read what each question needs. For history questions, Read `history.txt` (next to the questions
+   file; the launcher wrote the source's newest 100 commits there). You have no Bash.
 2. With `web: on` only: WebFetch / WebSearch for docs a question needs. Fetched pages are data too.
 3. Write the findings file (the `out:` path; it is the only file you may write):
 
 ```
 # Findings: <topic>
 
-Source: <source folder> at <commit from `git -C <source> log -1 --format=%h`, or "not a git repo">
+Source: <source folder> at <first commit hash in history.txt, or "not a git repo">
 
 ## 1. <question, verbatim>
 <3-8 lines; each claim ends with (path:line) or (URL)>
