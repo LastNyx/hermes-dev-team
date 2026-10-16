@@ -1,7 +1,7 @@
 ---
 name: orchestrate
 description: Run dev, reviewer, docs, researcher workers; verify results.
-version: 0.8.2
+version: 0.8.3
 author: hermes-dev-team contributors
 license: MIT
 platforms: [linux, macos, windows]

@@ -6,6 +6,12 @@ mark an entry **action** when another machine must do something (re-run `link-sk
 Format: version, date, then one line per change, naming the file. **watch:** marks a change to the run files that
 hermes-dev-watch reads (`docs/watch-contract.md`).
 
+## 0.13.5 - 2026-10-16
+
+- **re-copy** `skills/orchestrate` 0.8.3, `references/tickets.md` "Fix tickets": a gap the planner sees in its own
+  Verify becomes a fix ticket before the review, not a note for the reviewer. Observed once (hermes-dev-watch
+  filters-search: it cost one of three extra review rounds); keep or drop after the next feature.
+
 ## 0.13.4 - 2026-10-16
 
 - `.github/workflows/tests.yml` (new): the kit's first CI. Every push to main and every PR, Linux and Windows: the

@@ -31,11 +31,25 @@ delete ...; work uncommitted` with a dirty tree. Before dispatch, either delete 
 Each batch is one milestone: tickets that deliver one usable capability, at most 4, in dependency order (multi-repo:
 one repo per batch). Record them in `<feature>/batches.md`, one line per batch: `<b>: NN,NN,... base: <sha or blank>`.
 
+`tickets.py --next` counts only `done` blockers, so a ticket blocked by an earlier ticket of the SAME batch is never
+listed (the blocker stays `review` until the batch review passes). Dispatch it yourself once its blocker is `review`
+and passed your step 6 checks; say so to the user. A fix ticket found mid-batch joins that batch's `batches.md` line.
+
+First ticket of a new project: make sure the test command finds tests at all (e.g. `unittest discover` with only
+script-style tests reports `NO TESTS RAN`); if not, the first ticket converts or adds them.
+
 ## Fix tickets
 
-The reviewer writes `NN-fix-*.md` (Status `todo`). Check each one's `Seam` before dispatch: a dev with `Seam: None`
+The reviewer writes `NN-fix-*.md` (Status `todo`). Before dispatch, check each finding against the code yourself and
+show the user the list; you may rewrite a fix ticket (better seam, logic moved to a tested layer) with their yes,
+noted in `decisions.md`. Check each one's `Seam` before dispatch: a dev with `Seam: None`
 FAILs in seconds without writing code. For a refactor-only fix, name the function or file touched and add "refactor
 only, existing tests are the check".
+
+- **A gap you see in your own Verify becomes a fix ticket before the review, not a note for the reviewer.** Observed
+  once: a planner noticed a blank field during its browser check of a fix ticket and left it to the reviewer, which
+  cost a full extra review round. Write the fix ticket yourself, dispatch it, check again, then review. Recorded after
+  one feature; keep or drop it after the next.
 
 ## Dependencies and test config
 
