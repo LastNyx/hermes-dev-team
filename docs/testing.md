@@ -98,6 +98,20 @@ macOS: not run.
   through (`<wrapper> log > .git/hooks/x`); the hooks guard would catch it after the run. `push_guard.py`'s
   "known gap" (a teammate's branch deleted by URL) is caught on some machines and missed on others; why is not known.
 
+## Owed (do on the next machine or feature)
+
+- **On Linux (the other machine):** run `python tests/planner_log.py` (with
+  `HDW_CORE=<hermes-dev-watch>/hermes_dev_watch/core.py`) and add a Results row; CI covers ubuntu-latest, not CachyOS.
+- **hermes-dev-watch Linux binary:** start the v0.3.4 `hermes-dev-watch-linux-x64` once on a project with planner
+  lines; check the header (`· N planner`), planner rows and a planner run log. The Windows `.exe` was checked
+  2026-10-16 (foreground clicks needed; background clicks do not reach the WebView2 page).
+- **Next real feature:** judge the planner-fix-ticket lesson (orchestrate `references/tickets.md`, "Fix tickets you
+  write yourself"): did every planner Verify, fix and rewrite show in `runs.log` without the user asking, and did the
+  reviewer find design flaws in planner-written fixes? Record review rounds and cost per batch.
+- **Switching to the other machine:** `git pull` in hermes-dev-team (linked skills follow) and hermes-dev-watch; in
+  hermes-dev-watch, `python <kit>/scratch.py init --clone https://github.com/LastNyx/hermes-dev-watch-scratch.git`
+  if `.scratch` is absent, else `python <kit>/scratch.py resume`.
+
 ## Earlier tests
 
 Older end-to-end runs (roles, allow-lists, guards, backends) were scripted in throwaway folders and are recorded as
