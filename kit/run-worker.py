@@ -279,7 +279,9 @@ def stream_worker(cmd, progress_path, env=None, lock=None):
                 for c in content if isinstance(content, list) else []:
                     if not isinstance(c, dict):
                         continue
-                    if c.get("type") == "tool_use":
+                    if c.get("type") == "text" and ev.get("type") == "assistant" and (c.get("text") or "").strip():
+                        emit("say: " + " ".join(c["text"].split())[:160])     # what the worker says it is doing
+                    elif c.get("type") == "tool_use":
                         names[c.get("id")] = c.get("name")
                         emit(tool_line(c.get("name"), c.get("input") or {}))
                     elif c.get("type") == "tool_result" and c.get("is_error"):

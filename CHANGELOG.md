@@ -5,6 +5,14 @@ mark an entry **action** when another machine must do something (re-run `link-sk
 
 Format: version, date, then one line per change, naming the file.
 
+## 0.13.2 - 2026-10-16
+
+- `kit/run-worker.py`: the progress log also gets a `say: <first 160 chars>` line for each text block the worker
+  writes (assistant events only), so a reader sees why it runs a tool, not just which tool. Checked by feeding a
+  Claude-shaped stream-json through `stream_worker`: the assistant text logged, the user-side text did not, and the
+  final result still came back. Not yet seen on a real `claude -p` run. Hermes backend: unchanged (its flat events
+  carry no text blocks).
+
 ## 0.13.1 - 2026-10-16
 
 Read-only git grants could write files. Measured (Linux, Claude Code 2.1.296, git 2.56): with `Bash(git log:*)`
