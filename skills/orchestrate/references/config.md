@@ -12,7 +12,7 @@ Write only `test` plus what the user named; every other key has a working defaul
 | `test` | the full test command (reviewer runs it; dev uses the ticket's `Test command:`) |
 | `models` | per role, Claude runs only, e.g. `{"dev": "sonnet"}` |
 | `effort` | `"medium"`, or per role |
-| `protected` | more file-name globs the dev may not edit, on top of the launcher's package/lock/test-config list. Globs match the file NAME at any depth, never a path: `.github/**` protects nothing, `*.yml` protects every workflow |
+| `protected` | more file-name globs the dev may not edit, on top of the launcher's package/lock/test-config list |
 | `backend` | `auto` (default), `claude`, `hermes`, or a per-role map |
 | `hermes_models`, `hermes_provider`, `hermes_profile` | Hermes runs only; full provider model id per role; profile default `hdt-worker` |
 | `rules`, `rules_max_chars` | file or list pasted into every worker prompt instead of AGENTS.md/CLAUDE.md; cap default 40000 |

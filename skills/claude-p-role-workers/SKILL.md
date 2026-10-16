@@ -124,17 +124,7 @@ The dispatch is the same command for both; the planner never picks the backend.
   file); a bare "who owns rung 1" got "don't understand, explain more". Ask about scope limits early (e.g. "code only,
   or any research?") since the user raises them.
 - Version bumps: one grilled design = one release (one CHANGELOG entry, one push), even when built in several tested
-  parts; never plan a version per part. Bump only Z of X.Y.Z (a CI fix after a push is its own Z or folds into the
-  same entry); Y only on the user's say-so.
-- No-model tests in GitHub CI (Linux + Windows): put a `claude` stub (sh script + `.cmd`) on `$GITHUB_PATH`, since the
-  launcher only checks it exists and the tests replace the worker; make every launcher-level test SKIP, not crash,
-  without `claude`. Resolve the test's temp root (`tempfile.mkdtemp(...)).resolve()`): the Windows runner's TEMP is an
-  8.3 short path (`RUNNER~1`) and never equals the launcher's resolved path. A check that documents a known gap
-  ("this is NOT caught") behaves differently per machine; print it as INFO instead of asserting it.
-- A contract with another public repo (a reader of the run files): the kit's CI checks out that repo read-only and
-  runs its parser on the kit's committed samples; no cross-repo token (a dispatch token needs write access there, and
-  a leak of it can publish a release). The other repo's CI tests against the kit's `main` on push and weekly. Pin
-  actions by commit SHA and set `persist-credentials: false`, most of all in workflows that can write releases.
+  parts; never plan a version per part.
 - Record every measured run (backend, model/effort, wall, calls, in/cache_w/cache_r/out, $) as a row in the team
   repo's `docs/benchmarks.md`; the user reads it on the other machine after `git pull`.
 - Do not claim one backend is cheaper from toy runs: say the mechanism (fewer calls, smaller system prompt), n, and

@@ -6,6 +6,13 @@ mark an entry **action** when another machine must do something (re-run `link-sk
 Format: version, date, then one line per change, naming the file. **watch:** marks a change to the run files that
 hermes-dev-watch reads (`docs/watch-contract.md`).
 
+## 0.13.6 - 2026-10-16
+
+- Revert: the 0.13.5 commit also swept in uncommitted edits already sitting in the linked skill files, which the user
+  had not approved (claude-p-role-workers notes, browser-projects.md page-only/UI-check text, a config.md `protected`
+  note, tickets.md notes on `--next` and rewriting fix tickets). Back to their 0.13.4 text; only the approved
+  "gap in own Verify" lesson stays. Lesson: run `git status` and read the full diff before committing linked skills.
+
 ## 0.13.5 - 2026-10-16
 
 - **re-copy** `skills/orchestrate` 0.8.3, `references/tickets.md` "Fix tickets": a gap the planner sees in its own
