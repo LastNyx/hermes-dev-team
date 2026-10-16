@@ -1,7 +1,7 @@
 # Open: watching remote workers (dispatched through the Hermes gateway)
 
 Status: question saved, not designed. Grill after hermes-dev-watch's `filters-search` feature. Saved 2026-10-16.
-Grill together with [planner-log.md](planner-log.md): both add to `runs.log` and the run-file contract.
+Grilled after [planner-log.md](planner-log.md) (settled 2026-10-16), whose planner line shape it reuses.
 
 ## The ask
 
