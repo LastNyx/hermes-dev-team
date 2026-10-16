@@ -78,7 +78,10 @@ def run():
     check("worker deletes the feature branch by URL (tracking ref left) -> guard:pushed", g == ["pushed:origin"], g)
     sh(me, "push", "-q", "origin", "feat")
     g = guard(lambda: sh(me, "push", "-q", bare, "--delete", "mate-b"))
-    check("known gap: worker deletes a teammate's branch by URL -> not caught", g == [], g)
+    # Not a check: whether this is caught differs by machine (caught on CachyOS and GitHub's Windows runner, missed on
+    # a Windows 11 PC and GitHub's Ubuntu runner; cause not found), and a test must not fail because the guard did
+    # better than documented.
+    print(f"INFO known gap: worker deletes a teammate's branch by URL -> {'caught' if g else 'not caught'} here")
 
     # ---- through the launcher: main() runs for real (config, lock, snapshot, guards, RESULT line, runs.log); only
     # the model is replaced by a scripted worker that does the git action and claims PASS.

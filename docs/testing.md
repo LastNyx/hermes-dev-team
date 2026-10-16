@@ -11,7 +11,7 @@ with local bare repos as remotes, so nothing touches a real project or GitHub, a
 | `python tests/resume_e2e.py` | `scratch.py` (init, commit, decide, resume, stop, switch) and the worker lock, single repo, two clones as two machines plus a third for a clean fast-forward | 2 real `claude -p` dev runs (Sonnet, about $0.20 list) | about 1.5 min | 33 |
 | `python tests/resume_workspace.py` | the same for a multi-repo workspace (two repos, scratch in the workspace) | none | seconds | 6 |
 | `python tests/shared_repo.py` | a shared repo: a teammate pushes to main during a dev run, a known-broken suite on main (`baseline`), `sync-main` (refused mid-batch, dry run, merge, conflict + abort), batch diffs after a sync, a teammate's commit on the feature branch, an orphaned worker after a launcher SIGKILL | 3 real `claude -p` runs (2 dev, 1 reviewer; Sonnet) | about 2 min | 24 |
-| `python tests/push_guard.py` | the launcher's `guard:pushed`: teammate pushes and branch deletions pass; the worker's push, new branch, and branch deletion (by remote name and by URL) fail it | none (the launcher's `main()` runs with a scripted worker for the last 3) | seconds | 10 |
+| `python tests/push_guard.py` | the launcher's `guard:pushed`: teammate pushes and branch deletions pass; the worker's push, new branch, and branch deletion (by remote name and by URL) fail it; the known gap (a teammate's branch deleted by URL) is printed as INFO, not checked | none (the launcher's `main()` runs with a scripted worker for the last 3) | seconds | 9 |
 | `python tests/ponytail_ideas.py` | dev reuses an existing helper and ends Result with `Not checked:`; reviewer (35 turns) FAILs on a renamed field that breaks an untouched, untested file, cites it under Spec, writes a fix ticket | 2 real runs (dev, reviewer; Sonnet, about $0.30) | about 1 min | 9 |
 | `python tests/researcher.py [--ponytail]` | `research.py` (init, clone, topic, done), launcher refusals; a real researcher on a source whose AGENTS.md/README tell agents to write files, commit and stamp the report: cited answers, benchmark "claimed, not run", nothing obeyed; `--ponytail` adds a real run on github.com/DietrichGebert/ponytail | 1 real run (+1 with `--ponytail`; Sonnet, about $0.17 / $0.25) | about 1 min | 19 (26) |
 | `python tests/git_guard.py [--real]` | `kit/git-ro.py` allows log/diff/show and refuses `--output` (and abbreviations), `--ext-diff`, `--no-index`, outside paths, other subcommands; every role loses its raw git log/diff/show grants; `guard:git-hooks-or-config-changed` on a new, changed, chmod-ed or removed hook and a config edit, not on an ordinary commit; a source repo whose own config runs a program (gpg.program, diff.external, core.fsmonitor, textconv): neither the wrapper nor `history.txt` runs it, a subfolder gets no history; through `main()` with a scripted worker: dev FAILs when a hook is written mid-run, the researcher runs without Bash and gets `history.txt`, which a researcher refused by a held lock leaves alone. `--real`: the old `Bash(git log:*)` rule lets `git log --output` write into `.git/`, the new settings do not, the wrapper's plain log works | none (`--real`: 4 `claude -p` calls, Sonnet, about $0.55) | seconds (`--real` about 1 min) | 37 (40); 36 (39) on Windows, where the chmod check is skipped |
@@ -76,6 +76,8 @@ or the role JSON files. Add a row to "Results" below with the date, OS and numbe
 | 2026-10-16 | same | ad hoc probe (0.13.2) | found a bug | a source's own config ran a program on the launcher's `git log` (gpg.program, signed commit) and on git-ro's `git diff` (diff.external, core.fsmonitor, textconv); fixed in 0.13.3 |
 | 2026-10-16 | same | `git_guard.py` (0.13.3), `watch_contract.py` | 36/36, 16/16 | on the 0.13.2 kit: 27/36 (the 9 new checks fail); the samples also parsed by hermes-dev-watch 08265b1 `core.py` |
 
+| 2026-10-16 | GitHub Actions ubuntu-latest and windows-latest, Python 3.12 | CI, first run (0.13.4) | Ubuntu all pass (`git_guard` 37/37); Windows `git_guard` 35/36, then `push_guard` 9/10 | Windows: TEMP is the 8.3 short path `C:\Users\RUNNER~1\...`, and the test compared it with the launcher's resolved path (fixed: resolved temp root). The runner caught the "known gap" deletion that a Windows 11 PC and the Ubuntu runner miss: now INFO, not a check |
+
 macOS: not run.
 
 ## Not covered
@@ -91,7 +93,7 @@ macOS: not run.
   following `references/research.md` in a real session. `ponytail_ideas.py` not yet on Linux.
 - `git_guard.py --real` not yet on Windows. Unmeasured: whether the wrapper's prefix rule lets a shell redirect
   through (`<wrapper> log > .git/hooks/x`); the hooks guard would catch it after the run. `push_guard.py`'s
-  "known gap" check behaves differently on Linux (the deletion is caught), so it FAILs there.
+  "known gap" (a teammate's branch deleted by URL) is caught on some machines and missed on others; why is not known.
 
 ## Earlier tests
 

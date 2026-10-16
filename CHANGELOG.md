@@ -15,6 +15,10 @@ hermes-dev-watch reads (`docs/watch-contract.md`).
 - `tests/watch_parse.py` (new, 5 checks): loads the watcher's `core.py` and reads `tests/fixtures/watch/`.
 - `tests/push_guard.py`: its launcher checks are skipped without `claude` on PATH (they crashed on a missing
   `runs.log`), as in `git_guard.py`.
+- First CI run: Ubuntu passed (`git_guard` 37/37). Windows failed twice. (1) `git_guard`: the runner's TEMP is an
+  8.3 short path (`RUNNER~1`), so a path the test built did not equal the launcher's resolved one; the temp root is
+  now resolved. (2) `push_guard`: the runner caught the "known gap" deletion by URL that this PC and the Ubuntu
+  runner miss; it is now printed as INFO, not checked (9 checks).
 - `docs/watch-contract.md`: the kit's CI, not a token-driven trigger, runs the watcher's parser (a dispatch token
   would need write access to the watcher repo, which a leak turns into a release).
 
