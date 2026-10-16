@@ -1,0 +1,64 @@
+# No-model tests on every push and PR, on Linux and Windows, plus the run-file contract read by hermes-dev-watch's
+# own parser (docs/watch-contract.md). No secrets: both repos are public, the token is read-only, and fork PRs get
+# no secrets anyway. Actions are pinned by commit SHA (a tag can be moved).
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      GIT_TERMINAL_PROMPT: "0"
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          repository: LastNyx/hermes-dev-watch
+          ref: main
+          path: .ci/hermes-dev-watch
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: git identity and default branch for the tests' throwaway repos
+        run: |
+          git config --global user.name ci
+          git config --global user.email ci@example.invalid
+          git config --global init.defaultBranch main
+      - name: a `claude` stub on PATH (the launcher only checks it exists; the tests replace the worker with a script)
+        run: |
+          mkdir -p "$RUNNER_TEMP/stub"
+          printf '#!/bin/sh\necho "claude stub: never called by the no-model tests" >&2\nexit 1\n' > "$RUNNER_TEMP/stub/claude"
+          chmod +x "$RUNNER_TEMP/stub/claude"
+          printf '@echo claude stub: never called by the no-model tests 1>&2\r\n@exit /b 1\r\n' > "$RUNNER_TEMP/stub/claude.cmd"
+          echo "$RUNNER_TEMP/stub" >> "$GITHUB_PATH"
+      - name: run-file contract (kit side)
+        run: python tests/watch_contract.py
+      - name: run-file contract (hermes-dev-watch's parser on the kit's samples)
+        run: python tests/watch_parse.py .ci/hermes-dev-watch/hermes_dev_watch/core.py
+      - name: git_guard
+        run: python tests/git_guard.py
+      - name: push_guard
+        run: python tests/push_guard.py
+      - name: resume_workspace
+        run: python tests/resume_workspace.py
+      - name: existing_project
+        run: python tests/existing_project.py

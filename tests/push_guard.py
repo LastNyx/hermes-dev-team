@@ -106,6 +106,10 @@ def run():
         lines = buf.getvalue().strip().splitlines()
         return rc, next((l for l in reversed(lines) if l.startswith("RESULT")), "")
 
+    import shutil
+    if not shutil.which("claude"):
+        print("SKIP launcher checks: claude CLI not on PATH (main() refuses before the worker starts)")
+        return
     rc, line = launch(lambda: sh(mate, "push", "-q", "origin", "--delete", "mate-c"))
     check("launcher: teammate deletes a branch mid-run -> RESULT dev PASS, exit 0",
           rc == 0 and line.startswith("RESULT dev PASS"), line)

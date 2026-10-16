@@ -6,6 +6,18 @@ mark an entry **action** when another machine must do something (re-run `link-sk
 Format: version, date, then one line per change, naming the file. **watch:** marks a change to the run files that
 hermes-dev-watch reads (`docs/watch-contract.md`).
 
+## 0.13.4 - 2026-10-16
+
+- `.github/workflows/tests.yml` (new): the kit's first CI. Every push to main and every PR, Linux and Windows: the
+  no-model tests plus hermes-dev-watch's own parser on the kit's samples. No secrets (both repos public,
+  `contents: read`, checkout without persisted credentials), actions pinned by commit SHA, a `claude` stub on PATH
+  so the launcher checks run with a scripted worker.
+- `tests/watch_parse.py` (new, 5 checks): loads the watcher's `core.py` and reads `tests/fixtures/watch/`.
+- `tests/push_guard.py`: its launcher checks are skipped without `claude` on PATH (they crashed on a missing
+  `runs.log`), as in `git_guard.py`.
+- `docs/watch-contract.md`: the kit's CI, not a token-driven trigger, runs the watcher's parser (a dispatch token
+  would need write access to the watcher repo, which a leak turns into a release).
+
 ## 0.13.3 - 2026-10-16
 
 A source repo's own git config could run a program. Measured (Windows, git 2.53): the launcher's `git log` for

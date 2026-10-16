@@ -32,7 +32,11 @@ must match `^\d{8}-\d{6}-[a-z]+$`.
 
 ## The watcher's side
 
-- Its CI checks out this repo's `main` (on every push and nightly), runs `python tests/watch_contract.py`, and parses
-  `tests/fixtures/watch/` with its own `core.py`. A kit change it cannot read turns its CI red within a day.
+- **The kit's CI** (`.github/workflows/tests.yml`, every push and PR, Linux and Windows) checks out the watcher's
+  `main` and runs `python tests/watch_parse.py <watcher>/hermes_dev_watch/core.py`: the watcher's own parser on the
+  kit's samples. A kit change the watcher cannot read fails on the kit commit that made it. No token: both repos
+  are public and the workflow runs with `contents: read`.
+- The watcher's own CI should do the same against the kit's `main` (weekly is enough), so a watcher change that
+  stops reading the samples is caught on its side too.
 - It treats a `fmt` above the one it knows as "kit format newer than this watcher: update it" instead of guessing.
   A line or lock without `fmt` is format 1 (kit 0.13.2 and older).
