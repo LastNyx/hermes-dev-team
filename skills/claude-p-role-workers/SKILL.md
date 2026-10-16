@@ -56,6 +56,8 @@ gets the allow-list, so Claude stays the default backend; a Hermes worker profil
 
 20. **Run files have an outside reader.** `runs.log`, `runs/<id>.progress.log` and `runs/*.lock` are parsed by hermes-dev-watch (`docs/watch-contract.md`). Append new fields at the end, keep role names `[a-z]+`, run `tests/watch_contract.py`, and bump `teamcfg.RUN_FORMAT` for anything an old reader would misread.
 
+21. **A planner rule the planner can skip is not a record.** "Record decisions at once" and "read the diff before committing" were both skipped in one feature; the user missed reports that lived only in chat. Make the record a side effect of a command the planner must run (`scratch.py status` writes the Verify, the `runs.log` line and the commit; it refuses a ticket with a `Verify:` line and no record), and WARN in `resume` for what slipped past.
+
 ## Known hole
 
 The allowed test command runs code the worker wrote, so it can execute anything. Review before merge is the defence.

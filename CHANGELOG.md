@@ -6,6 +6,30 @@ mark an entry **action** when another machine must do something (re-run `link-sk
 Format: version, date, then one line per change, naming the file. **watch:** marks a change to the run files that
 hermes-dev-watch reads (`docs/watch-contract.md`).
 
+## 0.13.7 - 2026-10-16
+
+The planner's own actions are logged (design: `docs/open/planner-log.md`, grilled; design decision 40).
+
+- **watch:** `kit/plannerlog.py` (new): a `planner` line in `runs.log` per planner action, same shape as a worker's
+  (role and model `planner`, `turns=-`, secs since the previous planner line, new `action=` key before `fmt`; `fmt`
+  stays 1) and a `runs/<id>.progress.log` with the check's steps as `say:` lines. Verdict `PASS|FAIL|SKIP verify NN:
+  ...` for a check, `NOTE ...` otherwise. New samples in `tests/fixtures/watch/`; `docs/watch-contract.md` updated.
+- `kit/scratch.py`: new `status <feature> NN <status> [--verify "PASS|FAIL|SKIP: ..."] [--step ...]`, `fix
+  <feature> NN-fix-slug --for NN "<seen>"` and `rewrite <feature> NN "<why>"`; `decide` also logs a planner line.
+  `status` refuses a ticket with a `Verify:` line to review/done without a record, a FAIL to review without a
+  planner fix ticket for it, a FAIL to done, and done while a fix ticket naming it is open. `resume` prints WARNs.
+- `kit/tickets.py`: WARN for a ticket in review/done with a Verify line and no record, a fix ticket with no planner
+  or review origin, and a ticket changed after dispatch with no `Rewritten by the planner:` line (from the scratch
+  repo's git history). Finished features (all done) get none.
+- `kit/run-worker.py`: the reviewer's prompt names the batch's planner-written fix tickets, to check their design first.
+- **re-copy** `skills/orchestrate` 0.8.4: steps 3, 6 and 8 use `scratch.py status`/`fix`/`rewrite`; Verify runs
+  before the review when the planner can run it alone, after it when it needs a server, a database or the user's
+  yes. `references/tickets.md`: what a gap is, when a planner fix ticket needs the user's yes; the 0.8.3 lesson
+  becomes this procedure. `claude-p-role-workers` rule 21.
+- `tests/planner_log.py` (new, 34 checks; 35 with `HDW_CORE`), in CI with hermes-dev-watch's reader;
+  `tests/watch_contract.py` 17, `tests/watch_parse.py` 7. A real planner run (Hermes, orchestrate skill, toy repo)
+  is recorded in `docs/testing.md`.
+
 ## 0.13.6 - 2026-10-16
 
 - Revert: the 0.13.5 commit also swept in uncommitted edits already sitting in the linked skill files, which the user

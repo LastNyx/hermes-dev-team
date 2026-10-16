@@ -1,6 +1,6 @@
 # Design: logging the planner's own actions
 
-Status: grilled and settled 2026-10-16; not built. Build waits for the user's go. Designed alone, before
+Status: grilled and settled 2026-10-16; built in kit 0.13.7 and hermes-dev-watch 0.3.4. Designed alone, before
 [remote-runs.md](remote-runs.md), which reuses the planner line's shape later.
 
 ## The problem

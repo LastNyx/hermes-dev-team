@@ -3,7 +3,7 @@
 
 No model. Drives the launcher's real writers with fixed inputs: `report()` (a dev PASS, a researcher FAIL, a Hermes
 run), `stream_worker()` on a scripted Claude-shaped stream (assistant text, tool calls, a denial, user-side text) and
-`write_lock()`. Then reads the result with the watcher's rules (first six tab fields by position, `key=value` after,
+`write_lock()`, plus one planner line (`plannerlog.log()`, a failed Verify with two steps). Then reads the result with the watcher's rules (first six tab fields by position, `key=value` after,
 run id `^\\d{8}-\\d{6}-[a-z]+$`, progress lines `[ Ns] text` with `say: ` / `DENIED ` / `exit!=0 ` prefixes, lock JSON)
 and compares the output with the committed samples in tests/fixtures/watch/, which hermes-dev-watch's CI parses.
 
@@ -12,7 +12,7 @@ and compares the output with the committed samples in tests/fixtures/watch/, whi
 `--update` rewrites the samples after an intended format change (then bump teamcfg.RUN_FORMAT if an old watcher
 would misread the new files, and note it in CHANGELOG with **watch:**). Last line: `<n>/<total> checks passed`.
 """
-import contextlib, importlib.util, io, json, os, pathlib, re, shutil, sys, tempfile, types
+import contextlib, datetime, importlib.util, io, json, os, pathlib, re, shutil, sys, tempfile, types
 
 HERE = pathlib.Path(__file__).resolve().parent
 KIT = HERE.parent / "kit"
@@ -25,7 +25,7 @@ RUN_ID = re.compile(r"^\d{8}-\d{6}-[a-z]+$")
 LINE = re.compile(r"^\s*\[\s*(\d+)s\]\s?(.*)$")
 LOCK_KEYS = ("launcher_pid", "worker_pid", "role", "ticket", "feature", "repo", "stamp")
 KV_KEYS = ("turns", "list$", "denials", "feature", "ticket", "repo", "backend", "fmt")
-STAMP_DEV, STAMP_RES, STAMP_HER = "20261016-120000", "20261016-120500", "20261016-121000"
+STAMP_DEV, STAMP_RES, STAMP_HER, STAMP_PLN = "20261016-120000", "20261016-120500", "20261016-121000", "20261016-121500"
 
 
 def check(name, ok, detail=None):
@@ -94,11 +94,16 @@ def write_samples(rw, scratch):
                   runs / f"{STAMP_RES}-researcher.json", "claude")
         rw.report(st(STAMP_HER, "docs", "hermes", None, "calc", None), "PASS docs updated", "-", 40,
                   (None, None, None, None), None, [], runs / f"{STAMP_HER}-docs.json", "hermes")
+    import plannerlog                                      # kit/ is on sys.path (load_launcher)
+    plannerlog.log(scratch, "calc", "FAIL verify 01: the sum is blank", "verify", ticket="01-mul.md", repo="proj",
+                   steps=["loaded the page", "typed 2 and 3"], changes=["status 01 in-progress -> review"],
+                   now=datetime.datetime.strptime(STAMP_PLN, "%Y%m%d-%H%M%S"))
     lock = {"path": str(runs / "worker.lock"), "launcher_pid": 4242, "role": "dev", "ticket": "01-mul.md",
             "feature": "calc", "repo": "proj", "stamp": STAMP_DEV, "fmt": rw.teamcfg.RUN_FORMAT}
     rw.write_lock(lock, worker_pid=4343)
     os.chdir(ROOT)
-    return ["runs.log", f"runs/{STAMP_DEV}-dev.progress.log", "runs/worker.lock"]
+    return ["runs.log", f"runs/{STAMP_DEV}-dev.progress.log", f"runs/{STAMP_PLN}-planner.progress.log",
+            "runs/worker.lock"]
 
 
 def lf(p):
@@ -112,13 +117,14 @@ def runs_log_checks(rw, scratch):
         f = line.split("\t")
         kv = dict(x.split("=", 1) for x in f[4:] if "=" in x)
         rows.append((f, kv))
-    check("runs.log: 3 lines, each with at least 6 tab fields", len(rows) == 3 and all(len(f) >= 6 for f, _ in rows),
+    check("runs.log: 4 lines (3 workers, 1 planner), each with at least 6 tab fields", len(rows) == 4 and all(len(f) >= 6 for f, _ in rows),
           lines)
     check("runs.log: run id `<stamp>-<role>` matches the watcher's pattern",
           all(RUN_ID.match(f"{f[0]}-{f[1]}") for f, _ in rows), [f[:2] for f, _ in rows])
     check("runs.log: fixed positions: model f[2], verdict f[3], f[4] = turns=, f[5] = <secs>s",
           [(f[2], f[3].split()[0], f[4].startswith("turns="), f[5]) for f, _ in rows]
-          == [("sonnet", "PASS", True, "22s"), ("sonnet", "FAIL", True, "36s"), ("hermes", "PASS", True, "40s")],
+          == [("sonnet", "PASS", True, "22s"), ("sonnet", "FAIL", True, "36s"), ("hermes", "PASS", True, "40s"),
+              ("planner", "FAIL", True, "0s")],
           [f[:6] for f, _ in rows])
     check("runs.log: every key the watcher reads is present", all(all(k in kv for k in KV_KEYS) for _, kv in rows),
           [sorted(set(KV_KEYS) - set(kv)) for _, kv in rows])
@@ -127,6 +133,10 @@ def runs_log_checks(rw, scratch):
     check("runs.log: list$ parses as a float or is None, ticket/feature `-` when absent",
           float(rows[0][1]["list$"]) == 0.1234 and rows[1][1]["list$"] == "None" and rows[1][1]["ticket"] == "-",
           [kv for _, kv in rows])
+    pf, pkv = rows[3]
+    check("runs.log: planner line: role and model `planner`, turns=-, action=verify, its progress log exists",
+          (pf[1], pf[2], pkv.get("turns"), pkv.get("action"), pkv.get("ticket")) == ("planner", "planner", "-",
+          "verify", "01-mul.md") and (scratch / pf[9]).is_file(), pf)
 
 
 def progress_checks(scratch):

@@ -15,10 +15,13 @@ must match `^\d{8}-\d{6}-[a-z]+$`.
 | File | Writer (`kit/run-worker.py`) | Format |
 |---|---|---|
 | `runs.log` | `report()`, one line per finished run | tab-separated. Positions 1-6 fixed: `stamp`, `role`, `model`, `verdict`, `turns=<n>`, `<secs>s`. Then `key=value` fields, in this order today: `out`, `list$`, `denials`, the result JSON path (no `=`), `feature`, `test`, `in`, `cw`, `cr`, `repo`, `backend`, `enforce` (Hermes only), `ticket`, `fmt`. Absent values are `-` (feature, test, ticket) or `None` (tokens, `list$`) |
-| `runs/<id>.progress.log` | `stream_worker()`, while the run happens | one line per event: `  [<secs right-aligned to 4>s] <text>`. `<text>` is `<Tool> <arg>`, `say: <worker text, whitespace folded, 160 chars>`, `DENIED <tool>: <reason>` or `exit!=0 <tool>: <output>` |
+| `runs.log`, planner lines | `kit/plannerlog.py` `log()` (from `scratch.py status`/`fix`/`rewrite`/`decide`), one line per planner action | same shape, role and model `planner`, `turns=-`, `<secs>s` = time since the feature's previous planner line (0 for the first, or after 2 h). Verdict `PASS`/`FAIL`/`SKIP verify NN: <text>` for a check, `NOTE <action> ...` otherwise. Keys `out`/`in`/`cw`/`cr`/`list$` are `None`, `test` and `backend` are `-`, and `action=<verify\|status\|fix\|rewrite\|decide>` comes before `fmt` |
+| `runs/<id>.progress.log` | `stream_worker()`, while the run happens | one line per event: `  [<secs right-aligned to 4>s] <text>`. `<text>` is `<Tool> <arg>`, `say: <worker text, whitespace folded, 160 chars>`, `DENIED <tool>: <reason>` or `exit!=0 <tool>: <output>`. A planner's log: `say: <step>` lines, then one line per change (`status 05 in-progress -> review`) |
 | `runs/worker.lock` | `main()` / `write_lock()`, while a worker runs | JSON: `launcher_pid`, `worker_pid` (once started), `role`, `ticket`, `feature`, `repo`, `stamp`, `fmt`; `stop_requested` after `scratch.py stop`. The run is live while either pid is alive. Deleted when the launcher exits |
 
 `runs/` stays out of the scratch git repo, so a run made on another machine has a `runs.log` line but no log or lock.
+A planner line is never live (no lock) and counts as a run of role `planner`; hermes-dev-watch 0.3.4 leaves it out of
+the header's "today" pass/fail counts.
 
 ## Rules for kit changes
 

@@ -135,6 +135,8 @@ python KIT/scratch.py resume                        # step 0, run by the planner
 python KIT/scratch.py switch                        # you say "switching": push scratch + feature branch(es)
 python KIT/scratch.py init --clone <private-url>    # first time on the other machine
 python KIT/scratch.py stop                          # force-stop the running worker
+python KIT/scratch.py status <feature> NN review --verify "PASS: ..."   # planner: Status + Verify, logged
+python KIT/scratch.py fix <feature> NN-fix-x --for NN "<what was seen>" # planner: its own fix ticket, logged
 ```
 
 A project that used the kit before 0.11.0: follow [EXISTING-PROJECTS.md](EXISTING-PROJECTS.md) on each machine.

@@ -56,6 +56,8 @@ jobs:
         run: python tests/watch_contract.py
       - name: run-file contract (hermes-dev-watch's parser on the kit's samples)
         run: python tests/watch_parse.py .ci/hermes-dev-watch/hermes_dev_watch/core.py
+      - name: planner_log (with hermes-dev-watch's reader on the planner lines)
+        run: HDW_CORE=.ci/hermes-dev-watch/hermes_dev_watch/core.py python tests/planner_log.py
       - name: git_guard
         run: python tests/git_guard.py
       - name: push_guard

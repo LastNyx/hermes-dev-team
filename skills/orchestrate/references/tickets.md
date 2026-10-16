@@ -14,9 +14,16 @@ Load at step 2, and before writing or dispatching a fix ticket.
 ## Test command vs Verify
 
 `Test command` is what the dev may run: cheap and safe, no running services, no database writes (typecheck, lint,
-unit tests, a headless browser test that starts its own server). A check that needs a running server, a database, or
-the user's say-so goes on the `Verify:` line instead (else `None`): you run it yourself after the batch's review
-passes, ask first if a project rule requires it, and write the outcome under the ticket's `## Result`.
+unit tests, a headless browser test that starts its own server). Any other check goes on the `Verify:` line (else
+`None`) and you run it yourself:
+
+- **Before the review** (step 6), when you can run it alone: a browser with a stand-in bridge, a script, a sample file.
+- **After the review passes** (step 8), when it needs a running server, a database, or the user's say-so (ask first if
+  a project rule requires it).
+
+Record every Verify with `scratch.py status ... --verify "PASS|FAIL|SKIP: <text>" [--step "<what you did>"]`: it
+writes `Planner Verify:` under the ticket's `## Result` and a `planner` line in `runs.log`. A ticket with a `Verify:`
+line cannot reach `review` or `done` without one (SKIP for a check that waits).
 
 ## No deletions in tickets
 
@@ -37,10 +44,22 @@ The reviewer writes `NN-fix-*.md` (Status `todo`). Check each one's `Seam` befor
 FAILs in seconds without writing code. For a refactor-only fix, name the function or file touched and add "refactor
 only, existing tests are the check".
 
-- **A gap you see in your own Verify becomes a fix ticket before the review, not a note for the reviewer.** Observed
-  once: a planner noticed a blank field during its browser check of a fix ticket and left it to the reviewer, which
-  cost a full extra review round. Write the fix ticket yourself, dispatch it, check again, then review. Recorded after
-  one feature; keep or drop it after the next.
+**Fix tickets you write yourself.** A gap your own Verify finds becomes a fix ticket before the review, not a note
+for the reviewer:
+
+- A gap is a failed acceptance criterion or Verify, a crash, or a broken existing behaviour. A design opinion ("this
+  would be cleaner") goes to the reviewer instead.
+- `python KIT/scratch.py fix <feature> <NN-fix-slug> --for <NN> "<what you saw>"` writes the ticket from the original's
+  header (Round + 1, `Blocked by: <NN>`, `Found by the planner: ...`), adds it to the batch, logs a `decide` line and a
+  `planner` line. Fill the title, What to build and criteria, run `tickets.py`, then record the original's
+  `--verify "FAIL: ..."` (refused without such a fix ticket; `done` is refused while it is open).
+- Dispatch it at once when it fixes a failed criterion or Verify. When it adds scope beyond the original ticket's
+  criteria (a crash on input the criteria never named), show it to the user and wait for a yes.
+- The launcher names your fix tickets in the reviewer's prompt; the reviewer checks their design first.
+
+Observed once (hermes-dev-watch filters-search): a gap left to the reviewer cost a full extra round; in the next batch
+two planner-written fixes kept it to two rounds. Keep or drop this after the next feature: did every planner Verify,
+fix and rewrite show in `runs.log` without the user asking, and did the reviewer find design flaws in them?
 
 ## Dependencies and test config
 

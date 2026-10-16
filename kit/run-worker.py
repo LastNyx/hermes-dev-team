@@ -110,6 +110,18 @@ def prompt_path(prompt, key):
     return pathlib.Path(m.group(1)).expanduser().resolve() if m else None
 
 
+def planner_fixes(prompt):
+    """Batch tickets the planner wrote itself (`Found by the planner:`), from a reviewer prompt's `feature:` and
+    `tickets:`. The reviewer gets one line naming them, so it checks their design first (docs/open/planner-log.md)."""
+    feature, m = prompt_path(prompt, "feature"), re.search(r"tickets:\s*([0-9a-z,\s]+?)(?:\s+\w+:|$)", prompt, re.I)
+    if not feature or not m or not (feature / "issues").is_dir():
+        return []
+    want = {t.strip().lower() for t in m.group(1).split(",") if t.strip()}
+    return [p.name for p in sorted((feature / "issues").glob("*.md"))
+            if re.match(r"\d+[a-z]?", p.name, re.I) and re.match(r"\d+[a-z]?", p.name, re.I).group(0).lower() in want
+            and re.search(r"^Found by the planner\b", p.read_text(encoding="utf-8", errors="replace"), re.M)]
+
+
 def rel(p):
     """Repo-relative path for printing when the file is inside the repo, else absolute."""
     try:
@@ -616,6 +628,11 @@ def main():
         settings["permissions"]["allow"].append(f"Read({perm_path(gp)})")
         settings["permissions"]["deny"].append(f"Edit({perm_path(gp)})")
         prompt += f"\nThe glossary is {gp.as_posix()} (read it there; never edit it)."
+    if a.role == "reviewer":
+        own = planner_fixes(a.prompt)
+        if own:
+            prompt += ("\nThe planner wrote these fix tickets itself and checked them itself (each has a `Found by the "
+                       f"planner:` line): {', '.join(own)}. Review their design first; nobody else has looked at it.")
     if test_cmd:
         settings["permissions"]["allow"].append(f"Bash({test_cmd})")
         # measured: without this line a reviewer ran the ticket's narrower command and was denied

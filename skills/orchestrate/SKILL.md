@@ -1,7 +1,7 @@
 ---
 name: orchestrate
 description: Run dev, reviewer, docs, researcher workers; verify results.
-version: 0.8.3
+version: 0.8.4
 author: hermes-dev-team contributors
 license: MIT
 platforms: [linux, macos, windows]
@@ -63,9 +63,11 @@ Load a reference with `skill_view(name="orchestrate", file_path="references/<fil
 2. **Make tickets dispatchable** (load `tickets.md`). Show the user the `tickets.py` table (Seam, Test command,
    Verify per ticket) and the proposed review batches; they approve both before step 3.
 3. **Pick** the next `todo` ticket whose blockers are `done` (`python KIT/tickets.py <feature> --next`). Set it
-   `in-progress` yourself; workers never change Status. **After every Status change** (steps 3, 6, 8):
-   `python KIT/scratch.py commit "<NN> <status>"`. **Whenever the user decides something in chat** the files cannot
-   show: `python KIT/scratch.py decide <feature> "<one line>"` at once.
+   `in-progress` yourself; workers never change Status. **Every Status change** (steps 3, 6, 8) goes through
+   `python KIT/scratch.py status <feature> <NN> <status>`, never a hand edit: it edits, commits the scratch repo, and
+   logs a `planner` line in `runs.log`, which the user sees in hermes-dev-watch. **Whenever the user decides something
+   in chat** the files cannot show: `python KIT/scratch.py decide <feature> "<one line>"` at once. A ticket you edit
+   after dispatch: `scratch.py rewrite <feature> <NN> "<why>"` (tickets.py WARNs on an unrecorded rewrite).
 4. **Dispatch dev** with `terminal(background=true, heartbeat=120)`, cwd = the repo:
    `python -u KIT/run-worker.py dev "ticket: .scratch/<feature>/issues/NN-slug.md"`. The launcher takes the test
    command from the ticket and picks the backend; never retype the one or choose the other. Tell the user the
@@ -79,15 +81,22 @@ Load a reference with `skill_view(name="orchestrate", file_path="references/<fil
    discard. You may commit only on their explicit yes for that diff, with a subject NOT ending `(<ticket file>)`,
    finishing what the worker could not (e.g. a denied `git rm`). Then step 6 (on pass: `review`, not `blocked`) and
    `scratch.py decide`.
-6. **Verify**: `git log --stat -1`, the ticket's `Test command`, `git status --short`. PASS: set `review` (quick lane:
-   `done`). FAIL: set `blocked`, tell the user the reason line.
+6. **Verify**: `git log --stat -1`, the ticket's `Test command`, `git status --short`. Then the ticket's `Verify:`
+   line, if it is one you can run alone now (`tickets.md`, "Test command vs Verify"), recorded with the move:
+   `scratch.py status <feature> <NN> review --verify "PASS: <what you saw>" --step "<what you did>"...`
+   (quick lane: `done`; `"SKIP: <why it runs later>"` for a check that waits). A gap your check finds becomes a fix
+   ticket first: `scratch.py fix <feature> <NN-fix-slug> --for <NN> "<what you saw>"`, then
+   `--verify "FAIL: <gap>"`; the command refuses a FAIL without one. FAIL in the test command: set `blocked`, tell
+   the user the reason line.
 7. Repeat 3-6 until the batch's tickets are all `review` (quick lane: all `done`, then step 10).
 8. **Review the batch** (full lane):
    `python -u KIT/run-worker.py reviewer "feature: .scratch/<feature> batch: <b> tickets: NN,NN base: <sha> round: <n>"`.
    `base` = the commit before the batch: `git merge-base HEAD main` for batch 1, else the HEAD recorded when the
    previous batch passed (or the merge commit `sync-main` printed); write it into `batches.md`.
    Show the user the review's `Not checked:` line.
-   PASS: run each ticket's `Verify` (if any), set the tickets `done`, record HEAD as the next base, back to step 3.
+   PASS: run each `Verify` that had to wait (server, database, the user's yes), set the tickets `done` with
+   `scratch.py status` (`--verify` for those), record HEAD as the next base, back to step 3. The launcher tells the
+   reviewer which fix tickets you wrote yourself, so it checks their design first.
    FAIL: it wrote `review-<b>-<n>.md` and fix tickets; dispatch them (step 4), add them to `tickets:`, review again with
    round n+1 and the same base. Never dispatch round 3: ask the user.
 9. **Docs** (full lane, all `done`): `python KIT/run-worker.py docs "feature: .scratch/<feature>"`. Tell the user the

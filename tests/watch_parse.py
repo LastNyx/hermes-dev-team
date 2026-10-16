@@ -29,8 +29,9 @@ def main():
     spec.loader.exec_module(core)  # type: ignore[union-attr]
 
     runs = core.runs_log(FIXTURES)
-    check("watcher reads all 3 runs.log lines, by run id",
-          sorted(runs) == ["20261016-120000-dev", "20261016-120500-researcher", "20261016-121000-docs"], sorted(runs))
+    check("watcher reads all 4 runs.log lines, by run id",
+          sorted(runs) == ["20261016-120000-dev", "20261016-120500-researcher", "20261016-121000-docs",
+                           "20261016-121500-planner"], sorted(runs))
     dev = runs.get("20261016-120000-dev", {})
     check("dev run: model, verdict, turns, secs, cost, ticket, feature, repo, backend",
           (dev.get("model"), dev.get("verdict"), dev.get("turns"), dev.get("secs"), dev.get("cost"), dev.get("ticket"),
@@ -42,6 +43,15 @@ def main():
           == ("FAIL guard:pushed:origin", None, "1", "-"), res)
     her = runs.get("20261016-121000-docs", {})
     check("hermes run: backend hermes, turns `-`", (her.get("backend"), her.get("turns")) == ("hermes", "-"), her)
+
+    pln = runs.get("20261016-121500-planner", {})
+    check("planner line: model planner, FAIL verdict, turns `-`, no cost, ticket",
+          (pln.get("model"), pln.get("verdict"), pln.get("turns"), pln.get("cost"), pln.get("ticket"))
+          == ("planner", "FAIL verify 01: the sum is blank", "-", None, "01-mul.md"), pln)
+    pp = core.progress(FIXTURES, "20261016-121500-planner", 0)
+    check("watcher reads the planner's progress log (say: steps, then the change)",
+          isinstance(pp, dict) and "say: loaded the page" in pp.get("text", "")
+          and "status 01 in-progress -> review" in pp.get("text", ""), pp)
 
     p = core.progress(FIXTURES, "20261016-120000-dev", 0)
     text = p.get("text", "") if isinstance(p, dict) else ""
