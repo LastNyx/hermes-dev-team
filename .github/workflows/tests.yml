@@ -50,6 +50,8 @@ jobs:
           chmod +x "$RUNNER_TEMP/stub/claude"
           printf '@echo claude stub: never called by the no-model tests 1>&2\r\n@exit /b 1\r\n' > "$RUNNER_TEMP/stub/claude.cmd"
           echo "$RUNNER_TEMP/stub" >> "$GITHUB_PATH"
+      - name: show the temp path (Windows runners use an 8.3 short name)
+        run: python -c "import tempfile, pathlib; t = tempfile.gettempdir(); print(t, '->', pathlib.Path(t).resolve())"
       - name: run-file contract (kit side)
         run: python tests/watch_contract.py
       - name: run-file contract (hermes-dev-watch's parser on the kit's samples)

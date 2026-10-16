@@ -20,7 +20,8 @@ Last line: `<n>/<total> checks passed`; exit 0 only when all pass. See docs/test
 import contextlib, copy, importlib.util, io, json, os, pathlib, shutil, stat, subprocess, sys, tempfile
 
 KIT = pathlib.Path(__file__).resolve().parent.parent / "kit"
-ROOT = pathlib.Path(tempfile.mkdtemp(prefix="hdt-gitguard-"))
+# resolved: on GitHub's Windows runner TEMP is an 8.3 short path (RUNNER~1) and the launcher resolves to the long one
+ROOT = pathlib.Path(tempfile.mkdtemp(prefix="hdt-gitguard-")).resolve()
 os.environ.update(GIT_TERMINAL_PROMPT="0", PYTHONDONTWRITEBYTECODE="1")
 results = []
 
