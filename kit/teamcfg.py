@@ -20,6 +20,18 @@ import json, os, pathlib, subprocess, sys
 
 RULES_MAX_CHARS = 40000
 
+# Format of runs.log, runs/<stamp>-<role>.progress.log and runs/*.lock, which an outside reader (hermes-dev-watch)
+# parses; see docs/watch-contract.md. Bump only on a change an old reader would misread; additive changes keep it.
+RUN_FORMAT = 1
+
+# `-c` overrides for every git command the kit runs on a repo it does not trust (a research source, a worker's
+# read-only git). Measured (git 2.53 Windows): a source's own config ran a program on plain `git log` (gpg.program via
+# log.showSignature or %G?), `git diff` (diff.external, core.fsmonitor, a textconv or external driver from
+# info/attributes); with these plus `--no-ext-diff --no-textconv` none ran.
+GIT_SAFE = ("-c", "log.showSignature=false", "-c", "diff.external=", "-c", "core.fsmonitor=false",
+            "-c", "gpg.program=hdt-no-gpg", "-c", "gpg.ssh.program=hdt-no-gpg", "-c", "gpg.x509.program=hdt-no-gpg",
+            "-c", "core.pager=cat", "--no-pager")
+
 
 def _read(p):
     try:

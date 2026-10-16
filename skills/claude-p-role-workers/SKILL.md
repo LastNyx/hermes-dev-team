@@ -52,6 +52,10 @@ gets the allow-list, so Claude stays the default backend; a Hermes worker profil
 
 18. **A read-only command prefix is not read-only.** `Bash(git log:*)` (also `diff:*`, `show:*`) allowed `git log --format=format:<text> --output=<path>`: 0 denials, the file written, also under `.git/hooks/` with `Edit(./.git/**)` denied. Before granting any `Bash(<cmd>:*)`, list the command's options that write files, run code or leave the repo; if there are any, grant a wrapper script that refuses them (`kit/git-ro.py`) and add an after-run guard for the place it would hit (hooks, config).
 
+19. **A read-only git command runs the repo's own config.** On a repo you did not write, plain `git log` ran `gpg.program` (a signed commit plus `log.showSignature`, or `%G?`) and `git diff` ran `diff.external`, `core.fsmonitor` and textconv drivers from `.git/info/attributes` (measured, git 2.53 Windows). Every git call the kit makes on such a repo goes through `teamcfg.GIT_SAFE` plus `--no-ext-diff --no-textconv`. Probe with a fake signed commit written as bytes: text-mode stdin on Windows adds `\r` and git silently rejects the object, so the probe reads clean.
+
+20. **Run files have an outside reader.** `runs.log`, `runs/<id>.progress.log` and `runs/*.lock` are parsed by hermes-dev-watch (`docs/watch-contract.md`). Append new fields at the end, keep role names `[a-z]+`, run `tests/watch_contract.py`, and bump `teamcfg.RUN_FORMAT` for anything an old reader would misread.
+
 ## Known hole
 
 The allowed test command runs code the worker wrote, so it can execute anything. Review before merge is the defence.

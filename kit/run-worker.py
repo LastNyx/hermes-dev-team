@@ -165,14 +165,24 @@ def read_only_git(settings):
 
 
 def research_history(src, out_dir, n=100):
-    """Write the source's history (newest n commits, --stat) to <topic>/history.txt; the researcher has no Bash."""
+    """Write the source's history (newest n commits, --stat) to <topic>/history.txt; the researcher has no Bash.
+
+    0.13.3: git runs with teamcfg.GIT_SAFE (a source's own config ran gpg.program on a plain `git log`, measured), and
+    only when the source IS a repo's top level: `git -C` walks up, so a subfolder or a plain folder inside another repo
+    (the research home is one) would get that repo's history under the source's name.
+    """
     path = out_dir / "history.txt"
-    r = subprocess.run(["git", "-C", str(src), "--no-pager", "log", f"-n{n}", "--stat", "--no-ext-diff", "--no-textconv",
-                        "--format=commit %h %ad %an%n    %s", "--date=short"],
-                       capture_output=True, text=True, encoding="utf-8", errors="replace",
-                       env={**os.environ, "GIT_TERMINAL_PROMPT": "0"})
+    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+    top = subprocess.run(["git", *teamcfg.GIT_SAFE, "-C", str(src), "rev-parse", "--show-toplevel"],
+                         capture_output=True, text=True, env=env)
+    r = None
+    if top.returncode == 0 and pathlib.Path(top.stdout.strip()).resolve() == src.resolve():
+        r = subprocess.run(["git", *teamcfg.GIT_SAFE, "-C", str(src), "log", f"-n{n}", "--stat", "--no-ext-diff",
+                            "--no-textconv", "--format=commit %h %ad %an%n    %s", "--date=short"],
+                           capture_output=True, text=True, encoding="utf-8", errors="replace", env=env)
     body = (f"# git log -n{n} --stat of {src.as_posix()} (written by the launcher)\n\n" + r.stdout
-            if r.returncode == 0 else f"# {src.as_posix()} is not a git repo (or has no commits)\n")
+            if r is not None and r.returncode == 0
+            else f"# {src.as_posix()} is not the top of a git repo (or has no commits); no history\n")
     path.write_text(body, encoding="utf-8")
     return path
 
@@ -194,7 +204,7 @@ def research_grants(settings, prompt, web):
     if out.parent.resolve() != q.parent.resolve():
         return "out: must sit next to questions: (one topic folder)"
     perms = settings["permissions"]
-    hist = research_history(src, out.parent)
+    hist = out.parent / "history.txt"         # written by main() once the worker lock is held (0.13.3)
     perms["allow"] += [f"Read({perm_path(src)}/**)", f"Read({perm_path(q)})", f"Read({perm_path(out)})",
                        f"Read({perm_path(hist)})", f"Edit({perm_path(out)})"]
     if web:
@@ -490,7 +500,8 @@ def report(st, verdict, turns, secs, usage, cost, denials, out_path, backend):
     line = (f"{st['stamp']}\t{st['role']}\t{st['model']}\t{verdict}\tturns={turns}\t{secs}s\t"
             f"out={tout}\tlist$={cost}\tdenials={len(denials)}\t{rel(out_path)}\t"
             f"feature={st['feature']}\ttest={st['test_cmd'] or '-'}\tin={tin}\tcw={tcw}\tcr={tcr}\trepo={st['repo_name']}"
-            f"\tbackend={backend}{enforce}\tticket={st.get('ticket') or '-'}")
+            f"\tbackend={backend}{enforce}\tticket={st.get('ticket') or '-'}\tfmt={teamcfg.RUN_FORMAT}")
+    # ^ read by hermes-dev-watch (docs/watch-contract.md): append new fields at the end, never reorder the first six
     with open(pathlib.Path(st["scratch"]) / "runs.log", "a", encoding="utf-8") as f:
         f.write(line + "\n")
     tag = " backend=hermes enforce=prompt-only" if backend == "hermes" else ""
@@ -642,9 +653,12 @@ def main():
         print(f"RESULT {a.role} ERROR worker already running: {held.get('role')} {held.get('ticket') or '-'} "
               f"since {held.get('stamp')} (wait for its exit, or `scratch.py stop`)"); return 2
     lock = {"path": str(teamcfg.lock_path(scratch)), "launcher_pid": os.getpid(), "role": a.role,
-            "ticket": st["ticket"], "feature": feature, "repo": repo.name, "stamp": stamp}
+            "ticket": st["ticket"], "feature": feature, "repo": repo.name, "stamp": stamp, "fmt": teamcfg.RUN_FORMAT}
     write_lock(lock)
     try:
+        if a.role == "researcher":            # after the lock: a refused second dispatch must not overwrite it
+            research_history(prompt_path(a.prompt, "source"),
+                             prompt_path(a.prompt, "out").parent)   # type: ignore[union-attr]  # research_grants checked
         if backend == "hermes":
             return run_hermes(st, role_prompt, prompt, runs, cut, cfg, hprofile, effort, turns, env, progress_path,
                               snap, protected, out_path, lock)

@@ -1,0 +1,3 @@
+20261016-120000	dev	sonnet	PASS 1a2b3c4	turns=18	22s	out=2000	list$=0.1234	denials=0	runs/20261016-120000-dev.json	feature=calc	test=python -m pytest -q	in=12	cw=30000	cr=150000	repo=proj	backend=claude	ticket=01-mul.md	fmt=1
+20261016-120500	researcher	sonnet	FAIL guard:pushed:origin	turns=15	36s	out=None	list$=None	denials=1	runs/20261016-120500-researcher.json	feature=dev-watch	test=-	in=None	cw=None	cr=None	repo=proj	backend=claude	ticket=-	fmt=1
+20261016-121000	docs	hermes	PASS docs updated	turns=-	40s	out=None	list$=None	denials=0	runs/20261016-121000-docs.json	feature=calc	test=-	in=None	cw=None	cr=None	repo=proj	backend=hermes	enforce=prompt-only	ticket=-	fmt=1

@@ -8,14 +8,21 @@ trailing flags. Measured (Claude Code 2.1.296, git 2.56): `git log --format=form
 with 0 denials and wrote <path>, also inside `.git/hooks/` although `Edit(./.git/**)` was denied. The launcher now
 grants this script instead of raw git log/diff/show.
 
-Refused: `--output` (and any abbreviation git might accept), `--ext-diff`, `--no-index`, and for diff a path argument
-that exists outside the repo (git then diffs outside files without `--no-index`). Last line on a refusal:
-`GIT-RO STOP <reason>` (exit 2).
+Refused: `--output` (and any abbreviation git might accept), `--ext-diff`, `--no-index`, `--textconv` (from `--textc`;
+plain `--text` is allowed), and for diff a path argument that exists outside the repo (git then diffs outside files
+without `--no-index`). Last line on a refusal: `GIT-RO STOP <reason>` (exit 2).
+
+0.13.3: git runs with teamcfg.GIT_SAFE and `--no-ext-diff --no-textconv`, so the repo's own config cannot make a
+read run a program (diff.external, core.fsmonitor, gpg.program, textconv drivers); measured in tests/git_guard.py.
 """
 import os, pathlib, subprocess, sys
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import teamcfg  # noqa: E402
+
 SUBCOMMANDS = ("log", "diff", "show")
-FORBIDDEN = ("--output", "--ext-diff", "--no-index")
+# option -> shortest prefix refused (git accepts unambiguous abbreviations; `--text` is a different, harmless option)
+FORBIDDEN = {"--output": "--o", "--ext-diff": "--e", "--no-index": "--no-i", "--textconv": "--textc"}
 
 
 def refusal(sub, args, repo):
@@ -25,8 +32,8 @@ def refusal(sub, args, repo):
         if arg == "--":
             continue
         name = arg.split("=", 1)[0]
-        if name.startswith("--") and len(name) > 2 and any(f.startswith(name) for f in FORBIDDEN):
-            return f"{arg} is refused (it writes a file or leaves the repo)"
+        if any(name.startswith(least) and opt.startswith(name) for opt, least in FORBIDDEN.items()):
+            return f"{arg} is refused (it writes a file, runs a program or leaves the repo)"
     if sub == "diff":
         for arg in args:
             if arg.startswith("-"):
@@ -40,14 +47,17 @@ def refusal(sub, args, repo):
 def main(argv):
     if not argv:
         print(f"GIT-RO STOP usage: git-ro.py {'|'.join(SUBCOMMANDS)} [args...]"); return 2
-    top = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True)
+    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+    top = subprocess.run(["git", *teamcfg.GIT_SAFE, "rev-parse", "--show-toplevel"], capture_output=True, text=True,
+                         env=env)
     if top.returncode:
         print("GIT-RO STOP cwd is not a git repo"); return 2
     repo = pathlib.Path(top.stdout.strip()).resolve()
     why = refusal(argv[0], argv[1:], repo)
     if why:
         print(f"GIT-RO STOP {why}"); return 2
-    return subprocess.run(["git", "--no-pager", *argv], env={**os.environ, "GIT_TERMINAL_PROMPT": "0"}).returncode
+    return subprocess.run(["git", *teamcfg.GIT_SAFE, argv[0], "--no-ext-diff", "--no-textconv", *argv[1:]],
+                          env=env).returncode
 
 
 if __name__ == "__main__":

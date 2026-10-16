@@ -3,7 +3,35 @@
 Every change to a skill, role, or the launcher gets an entry here, newest first. Linked skills update on `git pull`;
 mark an entry **action** when another machine must do something (re-run `link-skills.py`, paste LEARN.md, etc.).
 
-Format: version, date, then one line per change, naming the file.
+Format: version, date, then one line per change, naming the file. **watch:** marks a change to the run files that
+hermes-dev-watch reads (`docs/watch-contract.md`).
+
+## 0.13.3 - 2026-10-16
+
+A source repo's own git config could run a program. Measured (Windows, git 2.53): the launcher's `git log` for
+`history.txt` ran `gpg.program` on a source with a signed commit and `log.showSignature`; `git-ro.py`'s `git diff` ran
+`diff.external`, `core.fsmonitor` and a textconv driver from `.git/info/attributes`; `--ext-diff` was refused but these
+need no flag.
+
+- `kit/teamcfg.py`: `GIT_SAFE` (`-c` overrides: log.showSignature, diff.external, core.fsmonitor, gpg programs,
+  core.pager). `kit/git-ro.py` and `research_history()` use it plus `--no-ext-diff --no-textconv`; git-ro also refuses
+  `--textconv` (from `--textc`; `--text` stays allowed).
+- `kit/run-worker.py` `research_history()`: history only when the source is a repo's top level (`git -C <subfolder>`
+  gave the enclosing repo's history under the subfolder's name), and written after the worker lock is taken, so a
+  refused second dispatch no longer overwrites `history.txt`.
+- **watch:** `runs.log` lines end with `fmt=1`, the worker lock has `"fmt": 1` (`teamcfg.RUN_FORMAT`). Appended at the
+  end, so hermes-dev-watch 08265b1 reads them unchanged (checked by parsing the samples with its `core.py`).
+- `docs/watch-contract.md` (new): the run-file spec and the rules for changing it. `tests/watch_contract.py` (new,
+  16 checks, no model) drives `report()`, `stream_worker()`, `write_lock()` and compares with
+  `tests/fixtures/watch/`, the samples hermes-dev-watch's CI will parse.
+- `tests/git_guard.py`: a hostile source repo (10 checks: the raw probe fires; git-ro log/diff/show and history.txt run
+  nothing; `--textc` refused, `--text` allowed; a subfolder gets no history) and a lock check; 36 on Windows, 37 on
+  Linux. The 9 new checks fail on 0.13.2 (27/36). Docstring: `--real` is 4 calls, about $0.55.
+- **re-copy** `skills/orchestrate` 0.8.2 (`references/research.md`: comparing several sources in one background
+  script, re-check the findings a recommendation rests on, synthesis in the topic folder committed to the scratch
+  repo, clean-up keeps questions/findings); `skills/claude-p-role-workers` rules 19 (repo config runs programs) and
+  20 (run files have an outside reader); `docs/design.md` 38-39; `docs/testing.md`.
+- **action:** start a new planner session to load orchestrate 0.8.2.
 
 ## 0.13.2 - 2026-10-16
 

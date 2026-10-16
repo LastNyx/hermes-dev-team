@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """Read-only git for workers (kit/git-ro.py) and the launcher's `guard:git-hooks-or-config-changed`.
 
-No model: git-ro.py allows log/diff/show and refuses `--output` (and abbreviations), `--ext-diff`, `--no-index`, a
-diff path outside the repo, other subcommands; every role's settings lose their raw `git log/diff/show` grants; the
-hook/config fingerprint catches a new hook, a mode change, a config edit, and nothing on an untouched repo; the
-launcher's `main()` with a scripted worker FAILs a run that writes a hook and passes one that does not; the
-researcher runs without Bash and gets history.txt.
+No model: git-ro.py allows log/diff/show and refuses `--output` (and abbreviations), `--ext-diff`, `--no-index`,
+`--textconv`, a diff path outside the repo, other subcommands; on a repo whose own config runs a program (gpg.program,
+diff.external, core.fsmonitor, a textconv driver) neither git-ro.py nor the launcher's history.txt runs it (0.13.3), and
+a subfolder source gets no history; every role's settings lose their raw `git log/diff/show` grants; the hook/config
+fingerprint catches a new hook, a mode change (POSIX only), a config edit, and nothing on an untouched repo; the
+launcher's `main()` with a scripted worker FAILs a run that writes a hook and passes one that does not; the researcher
+runs without Bash and gets history.txt, written only once the worker lock is held.
 
-`--real` adds 2 real `claude -p` runs (Sonnet, about $0.25): the old rule `Bash(git log:*)` lets `git log --output`
+`--real` adds 4 real `claude -p` calls (Sonnet, about $0.55): the old rule `Bash(git log:*)` lets `git log --output`
 write a file (the 0.13.1 finding), the new settings deny it and the wrapper refuses it, and the wrapper's plain
 `log -1 --format=%h` works.
 
@@ -84,6 +86,54 @@ def wrapper_checks(repo):
         rc, out = ro(repo, *args)
         check(f"git-ro refuses {' '.join(a if 'outside' not in a else '<outside path>' for a in args)}",
               rc == 2 and want in out, out)
+
+
+def hostile_repo(name, mark):
+    """A repo whose own config runs `evil.sh` (it writes <mark>) from a plain log or diff: a signed commit +
+    log.showSignature + gpg.program, diff.external, core.fsmonitor, a textconv driver via .git/info/attributes."""
+    repo = make_repo(name)
+    evil = ROOT / f"{name}-evil.sh"
+    evil.write_text(f'#!/bin/sh\necho "$@" > "{mark.as_posix()}"\nexit 1\n', newline="\n")
+    os.chmod(evil, 0o755)
+    tree = sh(repo, "rev-parse", "HEAD^{tree}")
+    body = (f"tree {tree}\nparent {sh(repo, 'rev-parse', 'HEAD')}\nauthor t <t@x> 1 +0000\ncommitter t <t@x> 1 +0000\n"
+            "gpgsig -----BEGIN PGP SIGNATURE-----\n \n x\n -----END PGP SIGNATURE-----\n\nsigned\n")
+    # bytes: text-mode stdin on Windows turns \n into \r\n and git rejects the commit (measured)
+    c = subprocess.run(["git", "hash-object", "-t", "commit", "-w", "--stdin"], cwd=repo, input=body.encode(),
+                       capture_output=True).stdout.decode().strip()
+    sh(repo, "update-ref", "HEAD", c)
+    for k in ("gpg.program", "diff.external", "core.fsmonitor", "diff.x.textconv"):
+        sh(repo, "config", k, evil.as_posix())
+    sh(repo, "config", "log.showSignature", "true")
+    (repo / ".git" / "info").mkdir(exist_ok=True)
+    (repo / ".git" / "info" / "attributes").write_text("a.txt diff=x\n")
+    (repo / "a.txt").write_text("changed\n")
+    return repo
+
+
+def hostile_checks(rw):
+    mark = ROOT / "PWNED"
+    repo = hostile_repo("hostile", mark)
+    raw = subprocess.run(["git", "--no-pager", "log", "-1"], cwd=repo, capture_output=True)
+    check("hostile source: plain `git log` runs the repo's program (the 0.13.3 finding, so the probe is live)",
+          mark.exists(), raw.stderr.decode(errors="replace")[-300:])
+    for args in (["log", "-1"], ["log", "-1", "--format=%G?"], ["diff"], ["diff", "--stat"], ["show", "-s"]):
+        mark.unlink(missing_ok=True)
+        rc, out = ro(repo, *args)
+        check(f"git-ro {' '.join(args)} on a hostile repo: nothing of the repo's runs", not mark.exists(), out[-300:])
+    rc, out = ro(repo, "diff", "--textc")
+    check("git-ro refuses --textc (an abbreviation of --textconv)", rc == 2 and "refused" in out, out)
+    rc, out = ro(repo, "diff", "--text", "--stat")
+    check("git-ro allows --text (a different option)", rc == 0 and "a.txt" in out, out)
+    mark.unlink(missing_ok=True)
+    topic = ROOT / "topic-hostile"; topic.mkdir()
+    hist = rw.research_history(repo, topic)
+    check("history.txt of a hostile source: written, and nothing of the repo's runs",
+          not mark.exists() and "signed" in hist.read_text(), hist.read_text()[:300])
+    sub = repo / "pkg"; sub.mkdir()
+    hist = rw.research_history(sub, topic)
+    check("history.txt of a subfolder: no history (not the enclosing repo's under the subfolder's name)",
+          "no history" in hist.read_text() and "signed" not in hist.read_text(), hist.read_text()[:300])
 
 
 def settings_checks(rw):
@@ -185,6 +235,14 @@ def launcher_checks(rw, repo, hooks):
     check("launcher: researcher gets history.txt (Read granted, named in the prompt)",
           hist.is_file() and "init" in hist.read_text() and any("history.txt" in r for r in s["permissions"]["allow"])
           and str(hist.as_posix()) in seen["cmd"][2], (hist.read_text() if hist.is_file() else "missing"))
+    hist.write_text("KEEP\n")
+    lock = rw.teamcfg.lock_path(repo / ".scratch")
+    lock.write_text(json.dumps({"launcher_pid": os.getpid(), "role": "dev", "stamp": "x"}))   # a live run holds it
+    rc, line = launch("researcher", f"questions: {topic / 'questions.md'} out: {topic / 'findings.md'} source: {src}",
+                      lambda: None)
+    lock.unlink()
+    check("launcher: researcher refused by a held lock leaves history.txt alone",
+          rc == 2 and "already running" in line and hist.read_text() == "KEEP\n", (line, hist.read_text()[:80]))
 
 
 def claude_run(cwd, settings, command):
@@ -226,6 +284,7 @@ def run():
     rw = load_launcher()
     repo = make_repo("proj")
     wrapper_checks(repo)
+    hostile_checks(rw)
     settings_checks(rw)
     hooks = guard_checks(rw, repo)
     launcher_checks(rw, repo, hooks)
