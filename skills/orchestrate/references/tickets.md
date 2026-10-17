@@ -21,9 +21,9 @@ unit tests, a headless browser test that starts its own server). Any other check
 - **After the review passes** (step 8), when it needs a running server, a database, or the user's say-so (ask first if
   a project rule requires it).
 
-Record every Verify with `scratch.py status ... --verify "PASS|FAIL|SKIP: <text>" [--step "<what you did>"]`: it
-writes `Planner Verify:` under the ticket's `## Result` and a `planner` line in `runs.log`. A ticket with a `Verify:`
-line cannot reach `review` or `done` without one (SKIP for a check that waits).
+Record every Verify with `scratch.py status ... --verify "PASS|FAIL|SKIP: <what you saw>"`: it writes `Planner
+Verify:` under the ticket's `## Result` and a `planner` line in `runs.log`. Nothing forces it: a ticket with a
+`Verify:` line moved without one is a gap the user sees in hermes-dev-watch (SKIP for a check that waits).
 
 ## No deletions in tickets
 
@@ -49,17 +49,13 @@ for the reviewer:
 
 - A gap is a failed acceptance criterion or Verify, a crash, or a broken existing behaviour. A design opinion ("this
   would be cleaner") goes to the reviewer instead.
-- `python KIT/scratch.py fix <feature> <NN-fix-slug> --for <NN> "<what you saw>"` writes the ticket from the original's
-  header (Round + 1, `Blocked by: <NN>`, `Found by the planner: ...`), adds it to the batch, logs a `decide` line and a
-  `planner` line. Fill the title, What to build and criteria, run `tickets.py`, then record the original's
-  `--verify "FAIL: ..."` (refused without such a fix ticket; `done` is refused while it is open).
+- Copy the original ticket to `issues/<NN>-fix-<slug>.md`: same header, `Status: todo`, `Round:` + 1,
+  `Blocked by: <NN>`, a `Found by the planner: <what you saw>` line, then new What to build and criteria. Add it to
+  the batch's `batches.md` line, run `tickets.py`, `scratch.py decide <feature> "planner fix <file>: <what you saw>"`,
+  and record the original with `--verify "FAIL: <gap>"`.
 - Dispatch it at once when it fixes a failed criterion or Verify. When it adds scope beyond the original ticket's
   criteria (a crash on input the criteria never named), show it to the user and wait for a yes.
-- The launcher names your fix tickets in the reviewer's prompt; the reviewer checks their design first.
-
-Observed once (hermes-dev-watch filters-search): a gap left to the reviewer cost a full extra round; in the next batch
-two planner-written fixes kept it to two rounds. Keep or drop this after the next feature: did every planner Verify,
-fix and rewrite show in `runs.log` without the user asking, and did the reviewer find design flaws in them?
+- Tell the reviewer about it in the prompt (`... round: <n> planner fixes: <files>`), so it checks their design first.
 
 ## Dependencies and test config
 

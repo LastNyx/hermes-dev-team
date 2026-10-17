@@ -37,7 +37,7 @@ Hermes used fewer cached prompt tokens here (about 90-110k vs 300-410k) because 
 commands; the Claude allow-list forces one command per Bash call) and has a smaller system prompt. This is n = 1-2
 on a 7-line ticket: on a real project the code read dominates the prompt, cache reads are billed at a fraction of
 input, and Hermes reports no `$`. Not a cost claim. To compare for real, run the same real ticket on both backends and
-compare `dev` vs `dev@hermes` in `costs.py --by-role`.
+compare the token columns of the two `runs.log` lines (`backend=claude` vs `backend=hermes`).
 
 ## Rejected fallbacks measured on the way (2026-10-14)
 
@@ -60,7 +60,7 @@ compare `dev` vs `dev@hermes` in `costs.py --by-role`.
 
 ## Real projects
 
-Add `costs.py --by-role` tables from real projects here, with the date, feature and backend.
+Add per-feature totals from real projects' `runs.log` here, with the date, feature and backend.
 
 ## Researcher (0.13.0)
 

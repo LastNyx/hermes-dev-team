@@ -1,4 +1,4 @@
-"""Find a project's team config, scratch folder and worker rules. Shared by run-worker.py, costs.py, tickets.py and
+"""Find a project's team config, scratch folder and worker rules. Shared by run-worker.py, tickets.py and
 scratch.py.
 
 Lookup, from the repo root (or any folder):
@@ -24,8 +24,8 @@ RULES_MAX_CHARS = 40000
 # parses; see docs/watch-contract.md. Bump only on a change an old reader would misread; additive changes keep it.
 RUN_FORMAT = 1
 
-# `-c` overrides for every git command the kit runs on a repo it does not trust (a research source, a worker's
-# read-only git). Measured (git 2.53 Windows): a source's own config ran a program on plain `git log` (gpg.program via
+# `-c` overrides for every git command the kit runs for a worker's read-only git (git-ro.py); the kit runs no git on a
+# research source at all. Measured (git 2.53 Windows): a source's own config ran a program on plain `git log` (gpg.program via
 # log.showSignature or %G?), `git diff` (diff.external, core.fsmonitor, a textconv or external driver from
 # info/attributes); with these plus `--no-ext-diff --no-textconv` none ran.
 GIT_SAFE = ("-c", "log.showSignature=false", "-c", "diff.external=", "-c", "core.fsmonitor=false",

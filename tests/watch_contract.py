@@ -3,7 +3,7 @@
 
 No model. Drives the launcher's real writers with fixed inputs: `report()` (a dev PASS, a researcher FAIL, a Hermes
 run), `stream_worker()` on a scripted Claude-shaped stream (assistant text, tool calls, a denial, user-side text) and
-`write_lock()`, plus one planner line (`plannerlog.log()`, a failed Verify with two steps). Then reads the result with the watcher's rules (first six tab fields by position, `key=value` after,
+`write_lock()`, plus one planner line (`plannerlog.log()`, a failed Verify; planner lines have no progress log). Then reads the result with the watcher's rules (first six tab fields by position, `key=value` after,
 run id `^\\d{8}-\\d{6}-[a-z]+$`, progress lines `[ Ns] text` with `say: ` / `DENIED ` / `exit!=0 ` prefixes, lock JSON)
 and compares the output with the committed samples in tests/fixtures/watch/, which hermes-dev-watch's CI parses.
 
@@ -95,15 +95,13 @@ def write_samples(rw, scratch):
         rw.report(st(STAMP_HER, "docs", "hermes", None, "calc", None), "PASS docs updated", "-", 40,
                   (None, None, None, None), None, [], runs / f"{STAMP_HER}-docs.json", "hermes")
     import plannerlog                                      # kit/ is on sys.path (load_launcher)
-    plannerlog.log(scratch, "calc", "FAIL verify 01: the sum is blank", "verify", ticket="01-mul.md", repo="proj",
-                   steps=["loaded the page", "typed 2 and 3"], changes=["status 01 in-progress -> review"],
+    plannerlog.log(scratch, "calc", "FAIL verify 01: the sum is blank", "status", ticket="01-mul.md", repo="proj",
                    now=datetime.datetime.strptime(STAMP_PLN, "%Y%m%d-%H%M%S"))
     lock = {"path": str(runs / "worker.lock"), "launcher_pid": 4242, "role": "dev", "ticket": "01-mul.md",
             "feature": "calc", "repo": "proj", "stamp": STAMP_DEV, "fmt": rw.teamcfg.RUN_FORMAT}
     rw.write_lock(lock, worker_pid=4343)
     os.chdir(ROOT)
-    return ["runs.log", f"runs/{STAMP_DEV}-dev.progress.log", f"runs/{STAMP_PLN}-planner.progress.log",
-            "runs/worker.lock"]
+    return ["runs.log", f"runs/{STAMP_DEV}-dev.progress.log", "runs/worker.lock"]
 
 
 def lf(p):
@@ -134,9 +132,9 @@ def runs_log_checks(rw, scratch):
           float(rows[0][1]["list$"]) == 0.1234 and rows[1][1]["list$"] == "None" and rows[1][1]["ticket"] == "-",
           [kv for _, kv in rows])
     pf, pkv = rows[3]
-    check("runs.log: planner line: role and model `planner`, turns=-, action=verify, its progress log exists",
-          (pf[1], pf[2], pkv.get("turns"), pkv.get("action"), pkv.get("ticket")) == ("planner", "planner", "-",
-          "verify", "01-mul.md") and (scratch / pf[9]).is_file(), pf)
+    check("runs.log: planner line: role and model `planner`, turns=-, action=status, no progress log (field 10 `-`)",
+          (pf[1], pf[2], pkv.get("turns"), pkv.get("action"), pkv.get("ticket"), pf[9]) == ("planner", "planner", "-",
+          "status", "01-mul.md", "-"), pf)
 
 
 def progress_checks(scratch):

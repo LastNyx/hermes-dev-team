@@ -2,25 +2,30 @@
 
 Load when the user asks how some code works, whether a repo or library is worth learning or using, or how another
 repo differs from the current project ("learn how X works", "is X good to learn", "how does library Y do retries",
-"research how app A differs from ours"). Load it BEFORE reading the source yourself: hand-reading both repos and
-writing the report in chat skips the worker the user expects and its path:line-cited findings.
+"research how app A differs from ours"), and whenever an answer needs reading more than a few files, or a whole repo
+or folder ("find every place that does X", "map this module"). Load it BEFORE reading the source yourself: a fresh
+worker with the whole context for one search reads more thoroughly than you do between other work, and its findings
+cite path:line and list what it covered.
 
-The researcher is code only: repos, libraries, the user's own codebase. It is read-only under an enforced allow-list
-(Claude backend only; the launcher refuses Hermes for it), never runs the source's code, and writes one findings file.
+The researcher is code only: repos, libraries, the user's own codebase. It is read-only (Claude: an allow-list with no
+Bash; Hermes: no terminal, plus the launcher's after-run check that the source folder is unchanged and only the
+findings file was written), never runs the source's code or git, and writes one findings file.
 Research that is not about code (a market, a person, a product) is not its job: do it yourself with a citation skill.
 
 ## Flow
 
 1. **Questions first.** Turn the ask into 3-6 concrete questions a reader of the code can answer (what is the core
    and how big, what rules or algorithm, what does feature X check, what do the claims rest on, how does it install
-   here). Show them to the user and dispatch only after their yes; they may edit them.
+   here). For a whole-repo or cross-folder search, write a **survey** instead: a `Survey: <scope>` line (e.g. "every
+   place that computes a discount, with its rule") plus any questions; the worker covers the whole scope and lists
+   the folders it read and skipped. Show them to the user and dispatch only after their yes; they may edit them.
 2. **Where:**
    - Feature research (inside a project): `<scratch>/<feature>/research/<topic>/questions.md` and `findings.md`; cwd =
      the repo. Grilling reads the findings; they travel with switching.
    - No project: the research home (`python KIT/research.py init` once; env `HDT_RESEARCH_HOME`, else `~/research`).
      `python KIT/research.py topic <topic>` creates `.scratch/<topic>/questions.md`; cwd = the home.
-3. **Source:** the user's own repo, or any repo already checked out locally, is passed as its top-level path (no
-   copy; a subfolder gets no `history.txt`). Only a
+3. **Source:** the user's own repo, or any repo already checked out locally, is passed as its path (no
+   copy; a subfolder is fine). Only a
    repo with no local checkout is cloned, with `python KIT/research.py clone <url>`, into `<home>/src/<name>`
    (git-ignored, shallow, reused by follow-ups). The clone stays in the research home even when the research belongs
    to a project, so tell the user once where it went: it is the only research artefact outside the project.
@@ -35,7 +40,8 @@ Research that is not about code (a market, a person, a product) is not its job: 
    stops at the first run whose last line is not `RESULT researcher PASS`), then read all `findings.md`. Ask for hypotheses "not measurements" when the question is a symptom (lag, crash). A source
    already removed with `research.py done` must be cloned again.
 5. **Read only `findings.md`**, never the transcript. Every claim cites `path:line` (or a URL); numbers the source
-   states are "claimed, not run"; read its `Not found / unsure` and `Not checked:` lines.
+   states are "claimed, not run"; read its `Not found / unsure`, `Coverage` and `Not checked:` lines. A folder the
+   scope needed under `Skipped` means a follow-up run on that folder, not a guess.
    Before recommending, re-read the code yourself behind the two or three findings the recommendation rests on (the
    worker's claims about what code does are cheap to check and sometimes decisive); say which you did not check.
 6. **Recommend yourself, in chat.** The findings are facts; whether it is worth learning, adopting or installing is
@@ -55,6 +61,6 @@ Research that is not about code (a market, a person, a product) is not its job: 
   questions either.
 - A finding that says a file or folder is absent is the weakest kind: Glob has measured blind spots on Windows.
   Check it yourself before repeating it.
-- The researcher has no Bash (0.13.1); history comes from `history.txt`, which the launcher writes. Anything else
-  (installing, running tests, benchmarks) is
-  denied. If a question needs a run, say so to the user; do not widen the role.
+- The researcher has no shell and no git: history questions ("when did X change") are yours to answer with
+  `git log` in the source. Anything that needs a run (installing, tests, benchmarks) is out of scope: say so to the
+  user; do not widen the role.

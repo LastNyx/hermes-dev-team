@@ -199,9 +199,6 @@ def main():
     unknown = sorted({b for _, f, _, _ in rows for b in blockers(f["Blocked by"]) if b not in by_num})
     if unknown:
         print(f"FIX: Blocked by names tickets that do not exist: {', '.join(unknown)}"); problems += 1
-    import plannerlog  # noqa: E402  (imports this module; loaded late to avoid a cycle)
-    for w in plannerlog.warnings(feature):
-        print(f"WARN {w}")
     print(f"{len(rows)} ticket(s), {problems} to fix")
     return 1 if problems else 0
 

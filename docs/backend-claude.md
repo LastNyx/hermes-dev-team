@@ -1,33 +1,20 @@
----
-name: claude-p-role-workers
-description: Use when running claude -p role workers with allow-lists.
-version: 0.1.0
-author: hermes-dev-team contributors
-license: MIT
-platforms: [linux, macos, windows]
-metadata:
-  hermes:
-    tags: [team, claude-code, permissions]
-    related_skills: [orchestrate]
----
-
-# claude -p role workers
+# Claude backend (`claude -p` workers)
 
 Rules for running headless Claude Code workers under a deny-by-default allow-list. Measured on Claude Code 2.1.296.
-Reference implementation: this repo's `kit/run-worker.py` and `kit/roles/`. Evidence: `docs/design.md`.
+Code: `kit/backends.py` (`Claude`), the allow-lists in `kit/roles/*.json`, and the grants `kit/run-worker.py` adds.
+Why each rule exists: [design.md](design.md). The other backend: [backend-hermes.md](backend-hermes.md).
+Until 0.14.0 this was the Hermes skill `claude-p-role-workers`; it is maintainer documentation, not a planner skill.
 
 ## When to Use
 
-Changing `kit/run-worker.py` or a role file, adding a role, or debugging a worker that FAILs or gets denied.
-For the day-to-day dispatch loop, use `orchestrate` instead.
+Changing `kit/backends.py`, `kit/run-worker.py` or a role file, adding a role, or debugging a Claude worker that FAILs
+or gets denied. For the day-to-day dispatch loop, the planner uses the `orchestrate` skill.
 
 ## Why claude -p first
 
-Headless Hermes auto-approves commands, so nothing enforces a worker's limits. A Hermes provider that wraps Claude Code
-turns Claude Code's own tools off, so its allow-lists cannot guard a Hermes worker. Only a direct `claude -p` worker
-gets the allow-list, so Claude stays the default backend; a Hermes worker profile is the prompt-only fallback
-(see Backends). Keep the fallback on a plain provider (e.g. anthropic): the claude-subscription plugin spawns one
-`claude` per model call and made a headless run ~3x slower.
+Only a direct `claude -p` worker gets an allow-list that blocks a call before it runs, so `auto` prefers Claude. The
+Hermes backend is the agnostic fallback, enforced only by the prompt and the launcher's after-run guards
+([backend-hermes.md](backend-hermes.md)).
 
 ## Rules (each one cost a failed run)
 
@@ -48,15 +35,16 @@ gets the allow-list, so Claude stays the default backend; a Hermes worker profil
 14. **Toy test runners must be able to go red.** A runner that tests a function only `if hasattr(...)` passes before the code exists, and a correct dev worker FAILs "no red step". Use a runner that executes every `test_*.py` and tell the ticket to write `test_<x>.py`.
 15. **Glob patterns start with `**/`.** Glob with a `path` and a pattern beginning with a folder name (`benchmarks/**/*`) returns nothing on Windows even when the folder exists; `**/benchmarks/**` finds it. Put this in every role's tool rules, and never let a worker (or you) report a file absent from one empty Glob: confirm with a second pattern or a Read of the exact path.
 16. **A principle in a role prompt is not a behaviour until it is a procedure step.** "Reuse existing code first" as a section was ignored; a numbered "Grep the repo for an existing function before writing" step was followed. Test each new role rule with a toy repo that makes the wrong path tempting (an existing helper beside the obvious hand-rolled one), and make the reviewer check the same rule so a miss is caught.
-17. **A read-only role must be enforced, not asked for:** allow only Read/Glob/Grep plus `Edit(<its one output file>)` and no Bash (the launcher writes what it needs, e.g. `history.txt`), put nothing like `Edit(./**)` in deny (deny beats allow and would block the output file), and refuse the Hermes backend for it in the launcher. Source text the role reads (AGENTS.md, README comments) is data; verify with a planted-instruction source that it reports them and obeys none.
+17. **A read-only role gets no Bash and one write grant:** allow only Read/Glob/Grep plus `Edit(<its one output file>)`,
+    run it without the Bash tool, and put nothing like `Edit(./**)` in deny (deny beats allow and would block the output
+    file). Source text the role reads (AGENTS.md, README comments) is data; verify with a planted-instruction source that
+    it reports them and obeys none. On Hermes the same role is held by the launcher's source and topic-folder guards.
 
 18. **A read-only command prefix is not read-only.** `Bash(git log:*)` (also `diff:*`, `show:*`) allowed `git log --format=format:<text> --output=<path>`: 0 denials, the file written, also under `.git/hooks/` with `Edit(./.git/**)` denied. Before granting any `Bash(<cmd>:*)`, list the command's options that write files, run code or leave the repo; if there are any, grant a wrapper script that refuses them (`kit/git-ro.py`) and add an after-run guard for the place it would hit (hooks, config).
 
-19. **A read-only git command runs the repo's own config.** On a repo you did not write, plain `git log` ran `gpg.program` (a signed commit plus `log.showSignature`, or `%G?`) and `git diff` ran `diff.external`, `core.fsmonitor` and textconv drivers from `.git/info/attributes` (measured, git 2.53 Windows). Every git call the kit makes on such a repo goes through `teamcfg.GIT_SAFE` plus `--no-ext-diff --no-textconv`. Probe with a fake signed commit written as bytes: text-mode stdin on Windows adds `\r` and git silently rejects the object, so the probe reads clean.
+19. **A read-only git command runs the repo's own config.** On a repo you did not write, plain `git log` ran `gpg.program` (a signed commit plus `log.showSignature`, or `%G?`) and `git diff` ran `diff.external`, `core.fsmonitor` and textconv drivers from `.git/info/attributes` (measured, git 2.53 Windows). Every git call `kit/git-ro.py` makes goes through `teamcfg.GIT_SAFE` plus `--no-ext-diff --no-textconv`, and the launcher runs no git on a research source at all (0.14.0: the source guard fingerprints files instead). Probe with a fake signed commit written as bytes: text-mode stdin on Windows adds `\r` and git silently rejects the object, so the probe reads clean.
 
 20. **Run files have an outside reader.** `runs.log`, `runs/<id>.progress.log` and `runs/*.lock` are parsed by hermes-dev-watch (`docs/watch-contract.md`). Append new fields at the end, keep role names `[a-z]+`, run `tests/watch_contract.py`, and bump `teamcfg.RUN_FORMAT` for anything an old reader would misread.
-
-21. **A planner rule the planner can skip is not a record.** "Record decisions at once" and "read the diff before committing" were both skipped in one feature; the user missed reports that lived only in chat. Make the record a side effect of a command the planner must run (`scratch.py status` writes the Verify, the `runs.log` line and the commit; it refuses a ticket with a `Verify:` line and no record), and WARN in `resume` for what slipped past.
 
 ## Known hole
 
@@ -70,36 +58,15 @@ only new lines. Measured: a heartbeat is queued while the planner sits in `proce
 Each heartbeat costs one planner turn; 120 s means a typical 90 s run costs none. Read the RESULT line (always the last
 line), not the exit code alone. Never keep the terminal's working directory inside a throwaway repo you delete: later calls fail.
 
-## Backends: claude (default) and hermes (fallback)
+## Choosing the backend
 
-`run-worker.py` picks the backend: `--backend` flag, else `.team.json` `"backend"` (string or per-role map), else auto:
-claude when `ANTHROPIC_API_KEY` is set or `claude auth status` JSON says `"loggedIn": true` (no model call), else hermes.
-The dispatch is the same command for both; the planner never picks the backend.
-- **hermes** = one headless run in a dedicated worker profile (default `hdt-worker`, `.team.json` `hermes_profile`):
-  `hermes -p <profile> chat --query-file <prompt> -Q --in <repo> -t file,terminal --max-turns N --ignore-rules
-  --source tool --format stream-json [-m <hermes_models[role]>] [--provider <hermes_provider>] [--reasoning <effort>]`.
-  Sessions land in the worker profile, not the user's chat list. A missing profile prints the setup commands and
-  `RESULT ... ERROR no Hermes profile`; the agent never creates or edits a profile or Hermes config.
-- Measured (Sonnet 5.5 on the anthropic provider, toy ticket): 28 s vs 27 s for `claude -p`, about a quarter of the
-  cached prompt tokens. The slow 92 s of the first spike came from the claude-subscription plugin, not Hermes.
-- stream-json: flat `tool_use`/`tool_result` events (progress lines work) and a final `result` with `text`,
-  `session_id` and `tokens` (input, cache_write, cache_read, output). No `$`. The text can arrive in pieces; use
-  `result.text`. Pitfalls: `TERMINAL_CWD` overrides `--in` (the launcher unsets it); a turn cap exits 1 while the
-  model still writes its own RESULT line (the launcher fails any non-zero exit); first run on a new profile installs
-  dependencies (~2 min once). A tool call that exits non-zero shows as `exit!=0 <tool>` (not a denial).
-- Measured: `-m` overrides the profile default (`hermes_models.dev = claude-haiku-5-5` ran on Haiku, PASS 34 s).
-- No allow-list: `-t file,terminal` blocks nothing inside the shell. With `_tool-rules-hermes.md` in the prompt the
-  worker refused all 4 forbidden chores; without it, it did all 4. Tagged `backend=hermes enforce=prompt-only`.
-- Model names differ: Claude takes `sonnet`/`haiku` (`models`), Hermes takes the provider's full id
-  (`hermes_models`, e.g. `claude-sonnet-5-5`). `effort` feeds `--effort` (claude) or `--reasoning` (hermes).
-- Rejected: `delegate_task` subagents (one global `delegation.model`, a three-step prepare/delegate/finish flow, and
-  child sessions in the user's own profile).
-- Guards for both backends: main moved, branch changed, history rewritten, protected file changed, and `pushed`
-  (`git ls-remote` per remote before/after; an unreadable remote is skipped, not failed).
-- Project rules reach workers only through the launcher's paste (claude: `--setting-sources ""`; hermes:
-  `--ignore-rules`). Default = repo `AGENTS.md` then `CLAUDE.md`, whichever exist, each file once even if `@`-imported;
-  `.team.json` `rules` replaces it. A package-level `AGENTS.md` in a monorepo is NOT pasted unless listed in `rules`.
-  Check the `rules=<files>` field on the START line when a worker ignores a project rule.
+`kit/backends.py` `pick()`: `--backend` flag, else `.team.json` `"backend"` (string or per-role map), else auto: claude
+when `ANTHROPIC_API_KEY` is set or `claude auth status` JSON says `"loggedIn": true` (no model call), else hermes. The
+dispatch is the same command for both; the planner never picks the backend. Model names differ: Claude takes
+`sonnet`/`haiku` (`models`), Hermes takes the provider's full id (`hermes_models`). `effort` feeds `--effort` (claude)
+or `--reasoning` (hermes). Project rules reach workers only through the launcher's paste (claude:
+`--setting-sources ""`; hermes: `--ignore-rules`); check `rules=<files>` on the START line when a worker ignores one.
+After any change here, run `python tests/backend_smoke.py` (it calls a model).
 
 ## Process lessons
 
@@ -120,7 +87,7 @@ The dispatch is the same command for both; the planner never picks the backend.
   shows whether references load from the trigger table, which reading the skill cannot.
 - Judging an outside repo or prompt pack for ideas: shallow-clone it into scratch, read its core prompt/code (not the
   README hype), map each idea onto a concrete kit file (role prompt, reviewer axis, launcher), mark its benchmark
-  numbers "claimed, not run", and say why installing it would not reach workers (`--setting-sources ""`). Delete the
+  numbers "claimed, not run", and say why installing it would not reach Claude workers (`--setting-sources ""`). Delete the
   clone afterwards.
 - Grilling kit design: give every abstract choice a concrete example inside the question (a sample ticket, a sample
   file); a bare "who owns rung 1" got "don't understand, explain more". Ask about scope limits early (e.g. "code only,
@@ -130,7 +97,7 @@ The dispatch is the same command for both; the planner never picks the backend.
 - Record every measured run (backend, model/effort, wall, calls, in/cache_w/cache_r/out, $) as a row in the team
   repo's `docs/benchmarks.md`; the user reads it on the other machine after `git pull`.
 - Do not claim one backend is cheaper from toy runs: say the mechanism (fewer calls, smaller system prompt), n, and
-  that cache reads are billed at a fraction; the real comparison is `dev` vs `dev@hermes` in `costs.py` on a real ticket.
+  that cache reads are billed at a fraction; compare the token columns of `runs.log` on a real ticket.
 - Reviewing a kit update pulled from the other machine: read `git diff <old>..HEAD`, run the no-model tests
   (`tests/*.py` without model calls) on this OS, and look hardest at guards that were relaxed and at OS-specific
   process code measured on one OS only. Report findings ranked, with a recommended next step, before changing code.

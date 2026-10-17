@@ -6,6 +6,34 @@ mark an entry **action** when another machine must do something (re-run `link-sk
 Format: version, date, then one line per change, naming the file. **watch:** marks a change to the run files that
 hermes-dev-watch reads (`docs/watch-contract.md`).
 
+## 0.14.0 - 2026-10-17
+
+Thin down the kit (design: `docs/open/thin-down.md`, grilled). `docs/design.md` rewritten as the current state.
+
+- `kit/backends.py` (new): Claude/Hermes backend adapter (`ready`, `setup_error`, `command`, `progress`, `result`);
+  `kit/run-worker.py` is backend-neutral, ~757 -> ~594 lines.
+- `kit/plannerlog.py`: only `log()` and its helpers. `kit/scratch.py`: `status` (no refusals, no `--step`) and
+  `decide` write one planner line each; `fix`, `rewrite` and `--step` removed, as are the planner progress logs and
+  the WARNs in `resume` and `kit/tickets.py`. `kit/run-worker.py` no longer names planner fix tickets in the
+  reviewer's prompt.
+- **watch:** planner lines in `runs.log`: the result-path field is `-` (no progress log), `action=status|decide`;
+  `fmt` stays 1. `tests/fixtures/watch/` regenerated (planner progress log sample deleted); `docs/watch-contract.md`
+  updated. hermes-dev-watch: `tests/test_contract.py` `KitSamples.test_planner_line` must expect an empty planner
+  progress log instead of `say: loaded the page`; its `core.py` needs no change (`tests/watch_parse.py` 7/7 with it).
+- `kit/roles/researcher.md`: survey mode and a required `## Coverage` section; the researcher may run on the Hermes
+  backend (toolset `file`, no terminal), guarded by source-changed and topic-folder-changed checks. `history.txt`
+  removed: the launcher runs no git on sources.
+- `kit/costs.py` deleted. `kit/teamcfg.py`: comments only (no costs.py; `GIT_SAFE` now serves `git-ro.py` alone).
+- **action** `skills/claude-p-role-workers` moved to `docs/backend-claude.md`; new `docs/backend-hermes.md`. On every
+  machine after pull: `python kit/link-skills.py --apply` to remove the dangling `claude-p-role-workers` link.
+- **re-copy** `skills/orchestrate` 0.9.0: 136 -> 117 lines (target ~90 not reached); cost log section gone, generic
+  researcher trigger, planner fix tickets written by hand from the template plus a `decide` line. `references/`
+  `research.md`, `tickets.md`, `config.md`, `changing-skills.md`, `workspace.md` updated.
+- Tests: `tests/planner_log.py` 21, `tests/git_guard.py` 38, `tests/researcher.py` (no Hermes refusal, Coverage
+  check), `tests/watch_contract.py` 17, `tests/watch_parse.py` 7, new `tests/backend_smoke.py` (claude 5/5; hermes
+  SKIP without an `hdt-worker` profile). `README.md`, `TEAM.md`, `LEARN.md`, `docs/testing.md`,
+  `docs/watch-contract.md`, `docs/benchmarks.md` updated.
+
 ## 0.13.7 - 2026-10-16
 
 The planner's own actions are logged (design: `docs/open/planner-log.md`, grilled; design decision 40).

@@ -25,7 +25,7 @@ Write only `test` plus what the user named; every other key has a working defaul
 
 The launcher pastes the repo's `AGENTS.md` and `CLAUDE.md` (whichever exist, in that order; `@` imports inlined, each
 file once; `START` shows `rules=<files>`, plus `(<n>k>cap)` when cut) into every prompt, cut at `rules_max_chars`.
-Workers do not load them themselves (`--setting-sources ""`): their rules apply, their permissions do not. If those
+Workers do not load them themselves: their rules apply, their permissions do not. If those
 files are long, ask the user for a short worker rules file (commit author, no AI trailers, migration checks, ports,
 toolchain) and set `"rules"`. Put rules there, not in tickets. Extra changelogs: the project's rules name each one
 (file, language, audience) and `docs_edit` lists files outside README/CHANGELOG/docs.
@@ -40,5 +40,5 @@ Hermes workers run as `hermes -p <profile> chat … --source tool`, so their ses
 are **prompt-only** (`enforce=prompt-only` in RESULT): nothing blocks them while they run, only the launcher's
 after-run checks, so a write outside the repo or a checkout that switches back is not caught. Treat such a PASS like
 any PASS, but in step 6 also confirm `git status --short` is clean, and tell the user once per feature that these runs
-were prompt-only. Their `$` in `costs.py` is unknown (tokens are real). The first run on a new profile is slow because
+were prompt-only (details: the team repo's `docs/backend-hermes.md`). The first run on a new profile is slow because
 Hermes installs its dependencies once.

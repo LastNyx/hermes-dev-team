@@ -1,39 +1,35 @@
 #!/usr/bin/env python3
-"""Run one headless Claude Code worker in a project repo, under a role's allow-list.
+"""Run one headless worker in a project repo, on the claude or hermes backend (kit/backends.py).
 
 Usage (cwd = the project repo root):
-    python <kit>/run-worker.py <role> "<prompt>" [--test-cmd "<cmd>"] [--model M] [--max-turns N]
+    python <kit>/run-worker.py <role> "<prompt>" [--test-cmd "<cmd>"] [--model M] [--max-turns N] [--backend B]
     python <kit>/run-worker.py researcher "questions: <file> out: <file> source: <folder>" [--web]
-        (cwd = a project repo or the research home; Claude backend only; may run on main, it never commits)
+        (cwd = a project repo or the research home; may run on main, it never commits)
 
 Config: the repo's .team.json, or a workspace ../.team.json whose "repos" map names this folder (see teamcfg.py).
 The allowed test command is found in this order: --test-cmd; for dev, the ticket's `Test command:` line
 (prompt `ticket: <path>`); then `"test"` in the config. Models can be set per role with `"models": {"dev": "sonnet"}`.
 `ticket:` and `feature:` paths may point outside the repo (a workspace scratch folder): the launcher grants the worker
 read/write on the scratch folder only and tells it where that folder is. A ticket with a `Repo:` line refuses to run
-from any other folder. The feature name for the cost log is the first folder under the scratch folder.
+from any other folder.
 
-Roles live next to this file: roles/<role>.md (prompt) and roles/<role>.json (settings).
+Roles live next to this file: roles/<role>.md (prompt) and roles/<role>.json (claude allow-list).
 While the worker runs, prints one progress line per tool call (and per permission denial) and writes the same lines
 to .scratch/runs/<stamp>-<role>.progress.log. The LAST line printed is always the RESULT line; exit 0 only when the
-worker's last line is `RESULT: PASS` and the guards hold.
+worker's last line is `RESULT: PASS` and the guards hold. The guards run after every run on both backends; they are
+the only enforcement the hermes backend has.
 Every run appends a line to .scratch/runs.log and keeps the final result event (JSON) in .scratch/runs/.
-
-Measured facts this relies on (Claude Code 2.1.296):
-- `claude -p` exits 0 even when the worker gives up, so the RESULT line is parsed here.
-- `--setting-sources ""` ignores user/project settings, so a repo's .claude/settings.json cannot widen the allow-list.
-- `Edit(path)` rules govern both Edit and Write; deny rules beat allow rules.
 """
-import argparse, datetime, fnmatch, hashlib, json, os, pathlib, re, shutil, subprocess, sys, time
+import argparse, datetime, fnmatch, hashlib, json, os, pathlib, re, subprocess, sys, time
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import teamcfg  # noqa: E402
+import backends  # noqa: E402
 
 KIT = pathlib.Path(__file__).resolve().parent
 DEFAULTS = {"dev": ("sonnet", 40), "reviewer": ("sonnet", 35), "docs": ("haiku", 25), "researcher": ("sonnet", 40)}
-TOOLS = "Read,Edit,Write,Glob,Grep,Bash"
 # Files that decide what the allowed test command runs. If a worker could edit them, the test command would run
-# anything (e.g. a rewritten "test" script). Denied in roles/dev.json AND checked after every run (guard).
+# anything (e.g. a rewritten "test" script). Denied in the dev's allow-list AND checked after every run (guard).
 # A project adds more with .team.json "protected": ["glob", ...]; globs match the file name at any depth.
 PROTECTED = ["package.json", "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "bun.lockb",
              "jest.config.*", "vitest.config.*", "tsconfig*.json", "babel.config.*", ".babelrc",
@@ -110,18 +106,6 @@ def prompt_path(prompt, key):
     return pathlib.Path(m.group(1)).expanduser().resolve() if m else None
 
 
-def planner_fixes(prompt):
-    """Batch tickets the planner wrote itself (`Found by the planner:`), from a reviewer prompt's `feature:` and
-    `tickets:`. The reviewer gets one line naming them, so it checks their design first (docs/open/planner-log.md)."""
-    feature, m = prompt_path(prompt, "feature"), re.search(r"tickets:\s*([0-9a-z,\s]+?)(?:\s+\w+:|$)", prompt, re.I)
-    if not feature or not m or not (feature / "issues").is_dir():
-        return []
-    want = {t.strip().lower() for t in m.group(1).split(",") if t.strip()}
-    return [p.name for p in sorted((feature / "issues").glob("*.md"))
-            if re.match(r"\d+[a-z]?", p.name, re.I) and re.match(r"\d+[a-z]?", p.name, re.I).group(0).lower() in want
-            and re.search(r"^Found by the planner\b", p.read_text(encoding="utf-8", errors="replace"), re.M)]
-
-
 def rel(p):
     """Repo-relative path for printing when the file is inside the repo, else absolute."""
     try:
@@ -176,36 +160,8 @@ def read_only_git(settings):
     return subs
 
 
-def research_history(src, out_dir, n=100):
-    """Write the source's history (newest n commits, --stat) to <topic>/history.txt; the researcher has no Bash.
-
-    0.13.3: git runs with teamcfg.GIT_SAFE (a source's own config ran gpg.program on a plain `git log`, measured), and
-    only when the source IS a repo's top level: `git -C` walks up, so a subfolder or a plain folder inside another repo
-    (the research home is one) would get that repo's history under the source's name.
-    """
-    path = out_dir / "history.txt"
-    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
-    top = subprocess.run(["git", *teamcfg.GIT_SAFE, "-C", str(src), "rev-parse", "--show-toplevel"],
-                         capture_output=True, text=True, env=env)
-    r = None
-    if top.returncode == 0 and pathlib.Path(top.stdout.strip()).resolve() == src.resolve():
-        r = subprocess.run(["git", *teamcfg.GIT_SAFE, "-C", str(src), "log", f"-n{n}", "--stat", "--no-ext-diff",
-                            "--no-textconv", "--format=commit %h %ad %an%n    %s", "--date=short"],
-                           capture_output=True, text=True, encoding="utf-8", errors="replace", env=env)
-    body = (f"# git log -n{n} --stat of {src.as_posix()} (written by the launcher)\n\n" + r.stdout
-            if r is not None and r.returncode == 0
-            else f"# {src.as_posix()} is not the top of a git repo (or has no commits); no history\n")
-    path.write_text(body, encoding="utf-8")
-    return path
-
-
-def research_grants(settings, prompt, web):
-    """Researcher (B10): read the source and the questions, write ONLY the findings file. No Bash at all.
-
-    Paths come from the prompt (`questions:`, `out:`, `source:`). Nothing else is writable: the role JSON allows no
-    Edit and the launcher runs it without the Bash tool (0.13.1: a `git log:*` grant could write files through
-    `--output`); history comes from history.txt, which the launcher writes. Returns an error string or None.
-    """
+def research_paths(prompt):
+    """(questions, out, source) from a researcher prompt, or an error string."""
     q, out, src = (prompt_path(prompt, k) for k in ("questions", "out", "source"))
     if not (q and out and src):
         return "prompt needs questions: <file> out: <file> source: <folder>"
@@ -215,38 +171,65 @@ def research_grants(settings, prompt, web):
         return f"no source folder {src.as_posix()}"
     if out.parent.resolve() != q.parent.resolve():
         return "out: must sit next to questions: (one topic folder)"
-    perms = settings["permissions"]
-    hist = out.parent / "history.txt"         # written by main() once the worker lock is held (0.13.3)
-    perms["allow"] += [f"Read({perm_path(src)}/**)", f"Read({perm_path(q)})", f"Read({perm_path(out)})",
-                       f"Read({perm_path(hist)})", f"Edit({perm_path(out)})"]
+    return q, out, src
+
+
+def research_grants(settings, paths, web):
+    """Claude allow-list for the researcher: read the source and the questions, write ONLY the findings file.
+
+    The researcher runs without Bash (0.13.1: a `git log:*` grant could write files through `--output`).
+    """
+    q, out, src = paths
+    settings["permissions"]["allow"] += [f"Read({perm_path(src)}/**)", f"Read({perm_path(q)})",
+                                         f"Read({perm_path(out)})", f"Edit({perm_path(out)})"]
     if web:
-        perms["allow"] += ["WebFetch", "WebSearch"]
-    return None
+        settings["permissions"]["allow"] += ["WebFetch", "WebSearch"]
 
 
 def research_prompt(prompt, web):
-    """Rewrite the three paths absolute and tell the worker where the source's history is."""
+    """Rewrite the three paths absolute."""
     for key in ("questions", "out", "source"):
         pp = prompt_path(prompt, key)
         prompt = re.sub(rf"{key}:\s*\S+", lambda _m, k=key, v=pp: f"{k}: {v.as_posix()}", prompt, count=1)
-    hist = (prompt_path(prompt, "out").parent / "history.txt").as_posix()   # type: ignore[union-attr]  # checked
-    return (prompt + f"\nGit history of the source (newest 100 commits, --stat) is in {hist}; there is no Bash."
-            + ("\nweb: on" if web and "web:" not in prompt else ""))
+    return prompt + ("\nweb: on" if web and "web:" not in prompt else "")
 
 
-def tool_line(name, inp):
-    """One short progress line for a tool call."""
-    path = inp.get("file_path") or inp.get("path")
-    if path:                                        # absolute paths inside the repo -> repo-relative
-        try:
-            path = pathlib.Path(path).resolve().relative_to(pathlib.Path.cwd().resolve()).as_posix()
-        except (ValueError, OSError):
-            pass
-    arg = inp.get("command") or path or inp.get("pattern") or ""
-    if inp.get("pattern") and path:
-        arg = f"{inp['pattern']} in {path}"
-    arg = " ".join(str(arg).split())
-    return f"{name} {arg[:120]}"
+def tree_print(folder):
+    """{relative path: (size, mtime_ns, mode)} of every file under folder, .git included. Runs no git: the source is
+    untrusted, and a repo's own git config can make a plain `git status` run a program (0.13.3)."""
+    out = {}
+    for dirpath, _, files in os.walk(folder):
+        for f in files:
+            p = pathlib.Path(dirpath) / f
+            try:
+                st = p.stat()
+            except OSError:
+                continue
+            out[p.relative_to(folder).as_posix()] = (st.st_size, st.st_mtime_ns, st.st_mode)
+    return out
+
+
+def research_snapshot(paths):
+    q, out, src = paths
+    return {"source": tree_print(src), "topic": {k: v for k, v in tree_print(q.parent).items() if k != out.name}}
+
+
+def research_guards(before, paths):
+    """After a researcher run (both backends): the source folder unchanged (every file, .git included), and nothing
+    in the topic folder new or changed except the findings file. Known gap: a write elsewhere is not seen."""
+    if before is None:
+        return []
+    q, out, src = paths
+    now = research_snapshot(paths)
+    g = []
+    if now["source"] != before["source"]:
+        changed = sorted(k for k in set(now["source"]) | set(before["source"])
+                         if now["source"].get(k) != before["source"].get(k))
+        g.append("source-changed:" + "+".join(changed[:3]))
+    if now["topic"] != before["topic"]:
+        changed = sorted(k for k in set(now["topic"]) | set(before["topic"]) if now["topic"].get(k) != before["topic"].get(k))
+        g.append("topic-folder-changed:" + "+".join(changed[:3]))
+    return g
 
 
 def short(n):
@@ -257,11 +240,11 @@ def short(n):
 
 
 def stream_worker(cmd, progress_path, env=None, lock=None):
-    """Run claude or hermes with stream-json, print + log one line per tool call and per denial; return the final result event.
+    """Run a backend's command with stream-json, print + log one line per tool call and per denial; return the final
+    `result` event (the backend's `result()` reads it).
 
-    The final `result` event carries the same fields as --output-format json (subtype, result, num_turns, usage,
-    total_cost_usd, permission_denials). Progress lines go to stdout (flushed, so a background heartbeat sees them)
-    and to progress_path; the RESULT line printed by main() stays the last line.
+    Progress lines go to stdout (flushed, so a background heartbeat sees them) and to progress_path; the RESULT line
+    printed by main() stays the last line.
     lock: dict written to the worker lock file once the worker's pid is known (scratch.py stop kills that pid).
     """
     t0, final, names = time.time(), None, {}
@@ -282,36 +265,8 @@ def stream_worker(cmd, progress_path, env=None, lock=None):
                 if ev.get("type") == "result":
                     final = ev
                     continue
-                # Hermes (`hermes chat --format stream-json`, measured): flat events {"type": "tool_use", "name",
-                # "input"} and {"type": "tool_result", "name", "is_error", "output"}; no allow-list, so no denials.
-                if ev.get("type") == "tool_use" and "name" in ev:
-                    emit(tool_line(ev.get("name"), ev.get("input") or {}))
-                    continue
-                if ev.get("type") == "tool_result" and "name" in ev:
-                    if ev.get("is_error"):
-                        emit(f"exit!=0 {ev.get('name')}: {' '.join(str(ev.get('output') or '').split())[:100]}")
-                    continue
-                # measured (2.1.296): a denied call comes back as a tool_result "This command requires approval" with
-                # tool_result_meta[].permission_decision.decision == "reject"; the wording mentions neither "denied"
-                # nor "permission", so match the structured field first.
-                rejected = {m.get("id") for m in ev.get("tool_result_meta") or [] if isinstance(m, dict)
-                            and (m.get("permission_decision") or {}).get("decision") == "reject"}
-                msg = ev.get("message")
-                content = msg.get("content") if isinstance(msg, dict) else None
-                for c in content if isinstance(content, list) else []:
-                    if not isinstance(c, dict):
-                        continue
-                    if c.get("type") == "text" and ev.get("type") == "assistant" and (c.get("text") or "").strip():
-                        emit("say: " + " ".join(c["text"].split())[:160])     # what the worker says it is doing
-                    elif c.get("type") == "tool_use":
-                        names[c.get("id")] = c.get("name")
-                        emit(tool_line(c.get("name"), c.get("input") or {}))
-                    elif c.get("type") == "tool_result" and c.get("is_error"):
-                        body = c.get("content")
-                        body = body if isinstance(body, str) else json.dumps(body)
-                        low = body.lower()
-                        if c.get("tool_use_id") in rejected or "requires approval" in low or "permission" in low:
-                            emit(f"DENIED {names.get(c.get('tool_use_id'), '?')}: {' '.join(body.split())[:100]}")
+                for line in backends.progress_any(ev, names):
+                    emit(line)
             except Exception:                          # progress is best-effort; never let it kill the run
                 continue
     err = proc.stderr.read()
@@ -335,53 +290,6 @@ def write_lock(lock, **upd):
 def stop_requested(lock):
     d, _ = teamcfg.read_lock(pathlib.Path(lock["path"]).parent.parent)
     return bool(d and d.get("stop_requested"))
-
-
-def claude_ready():
-    """True when Claude Code can run a worker: `claude` on PATH and an API key or a logged-in subscription.
-
-    measured: `claude auth status` prints JSON with "loggedIn" and needs no model call.
-    """
-    if not shutil.which("claude"):
-        return False
-    if os.environ.get("ANTHROPIC_API_KEY"):
-        return True
-    try:
-        r = subprocess.run(["claude", "auth", "status"], capture_output=True, text=True, timeout=30)
-        return bool(json.loads(r.stdout or "{}").get("loggedIn"))
-    except (OSError, ValueError, subprocess.TimeoutExpired):
-        return False
-
-
-def pick_backend(role, cfg, forced):
-    """claude | hermes. `.team.json` "backend" is a string or a per-role map like "models"; default auto."""
-    v = forced or cfg.get("backend") or "auto"
-    if isinstance(v, dict):
-        v = v.get(role) or v.get("default") or "auto"
-    if v == "auto":
-        return "claude" if claude_ready() else "hermes"
-    if v not in ("claude", "hermes"):
-        raise SystemExit(f"RESULT {role} ERROR unknown backend {v!r} (claude, hermes, auto)")
-    return v
-
-
-def hermes_home():
-    if os.environ.get("HERMES_HOME"):
-        return pathlib.Path(os.environ["HERMES_HOME"]).expanduser()
-    la = os.environ.get("LOCALAPPDATA")
-    if la and (pathlib.Path(la) / "hermes").is_dir():
-        return pathlib.Path(la) / "hermes"
-    return pathlib.Path.home() / ".hermes"
-
-
-def hermes_profile_dir(name):
-    return hermes_home() / "profiles" / name
-
-
-HERMES_SETUP = """  one-time setup on this machine (run these yourself; the kit never edits Hermes config):
-    hermes profile create {p} --no-skills --no-alias
-    hermes -p {p} model          # pick the provider + default model for workers (e.g. anthropic, claude-sonnet-5-5)
-    hermes -p {p} chat -q "reply OK" -Q   # first run installs dependencies (slow once)"""
 
 
 def remote_refs():
@@ -534,9 +442,9 @@ def main():
     ap.add_argument("--model")
     ap.add_argument("--max-turns", type=int)
     ap.add_argument("--effort", choices=["low", "medium", "high", "xhigh", "max"],
-                    help="Claude Code effort; default .team.json effort (string or per-role map), else Claude's default")
+                    help="effort / reasoning; default .team.json effort (string or per-role map), else the backend's")
     ap.add_argument("--backend", choices=["claude", "hermes", "auto"], help="default: .team.json backend, else auto")
-    ap.add_argument("--web", action="store_true", help="researcher only: allow WebFetch/WebSearch for this run")
+    ap.add_argument("--web", action="store_true", help="researcher only: allow web fetch/search for this run")
     a = ap.parse_args()
     if not a.role or a.prompt is None:
         ap.error("role and prompt are required")
@@ -549,20 +457,12 @@ def main():
 
     tc = teamcfg.load()
     cfg, scratch, repo = tc["cfg"], tc["scratch"], pathlib.Path.cwd().resolve()
-    backend = pick_backend(a.role, cfg, a.backend)
-    if backend == "claude" and not shutil.which("claude"):
-        print(f"RESULT {a.role} ERROR claude CLI not on PATH"); return 2
-    if a.role == "researcher" and backend == "hermes":     # B10: read-only must be enforced, not asked for
-        print("RESULT researcher ERROR the researcher needs the claude backend (only its allow-list enforces read-only)"); return 2
+    be = backends.pick(a.role, cfg, a.backend)
+    err = be.setup_error(cfg)
+    if err:
+        print(f"RESULT {a.role} ERROR {err}"); return 2
     if a.web and a.role != "researcher":
         print(f"RESULT {a.role} ERROR --web is for the researcher only"); return 2
-    hprofile = cfg.get("hermes_profile") or "hdt-worker"
-    if backend == "hermes":
-        if not shutil.which("hermes"):
-            print(f"RESULT {a.role} ERROR no Claude login/API key and hermes CLI not on PATH"); return 2
-        if not hermes_profile_dir(hprofile).is_dir():
-            print(HERMES_SETUP.format(p=hprofile))
-            print(f"RESULT {a.role} ERROR no Hermes profile {hprofile} (setup commands above)"); return 2
     ticket = prompt_path(a.prompt, "ticket")
     want_repo = header_line(ticket, "Repo")
     if want_repo and want_repo != repo.name:
@@ -589,7 +489,7 @@ def main():
         settings["permissions"]["allow"] += [f"Edit(./{p.removeprefix('./')})" for p in docs_edit]
         prompt += "\nYou may also edit these files (the project's rules say what goes in them): " + ", ".join(docs_edit)
     outside = scratch != repo / ".scratch"
-    if outside or backend == "hermes":                         # hermes: absolute paths, its cwd is not the repo
+    if outside or be is backends.Hermes:                       # hermes: absolute paths, its cwd is not the repo
         for key in ("ticket", "feature"):
             pp = prompt_path(prompt, key)
             if pp:
@@ -606,20 +506,18 @@ def main():
             perms["deny"].append(f"Edit({perm_path(scratch)}/.git/**)")   # the scratch repo's own git
         prompt += (f"\nThe scratch folder is {scratch.as_posix()}: wherever your instructions say `.scratch/`, use that"
                    " folder (absolute paths).")
-    tools = TOOLS
     git_subs = read_only_git(settings)
     if git_subs:
         prompt += (f"\nRead-only git ({', '.join(git_subs)}) only through the kit wrapper, exactly: `{git_ro_cmd()} "
                    f"<{'|'.join(git_subs)}> <args>` (e.g. `{git_ro_cmd()} {git_subs[0]} --stat`). Plain `git "
                    f"{git_subs[0]}` is denied. Options that write a file (`--output`) are refused.")
+    rpaths = None
     if a.role == "researcher":
-        err = research_grants(settings, a.prompt, a.web)
-        if err:
-            print(f"RESULT researcher ERROR {err}"); return 2
+        rpaths = research_paths(a.prompt)
+        if isinstance(rpaths, str):
+            print(f"RESULT researcher ERROR {rpaths}"); return 2
+        research_grants(settings, rpaths, a.web)
         prompt = research_prompt(a.prompt, a.web)
-        tools = TOOLS.replace(",Bash", "")                    # 0.13.1: no Bash; history.txt instead
-        if a.web:
-            tools += ",WebFetch,WebSearch"
     glossary = cfg.get("glossary")
     if not glossary and cfg.get("shared") and (scratch / "GLOSSARY.md").is_file():
         glossary = str(scratch / "GLOSSARY.md")             # shared repo: the glossary stays out of the repo
@@ -628,11 +526,6 @@ def main():
         settings["permissions"]["allow"].append(f"Read({perm_path(gp)})")
         settings["permissions"]["deny"].append(f"Edit({perm_path(gp)})")
         prompt += f"\nThe glossary is {gp.as_posix()} (read it there; never edit it)."
-    if a.role == "reviewer":
-        own = planner_fixes(a.prompt)
-        if own:
-            prompt += ("\nThe planner wrote these fix tickets itself and checked them itself (each has a `Found by the "
-                       f"planner:` line): {', '.join(own)}. Review their design first; nobody else has looked at it.")
     if test_cmd:
         settings["permissions"]["allow"].append(f"Bash({test_cmd})")
         # measured: without this line a reviewer ran the ticket's narrower command and was denied
@@ -640,21 +533,19 @@ def main():
 
     runs = scratch / "runs"; runs.mkdir(parents=True, exist_ok=True)
     stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-    out_path, agents_path = runs / f"{stamp}-{a.role}.json", runs / f"{stamp}-{a.role}.agents.json"
+    out_path = runs / f"{stamp}-{a.role}.json"
     rules, rules_full, rules_used = project_rules(tc["rules"], tc["rules_max_chars"])
     rules_block = ("\n\n## Project rules (imports inlined; they bind you unless a tool rule below forbids the "
                    "action)\n\n" + rules.strip() + "\n") if rules.strip() else ""
-    tool_rules = "_tool-rules-hermes.md" if backend == "hermes" else "_tool-rules.md"
     role_prompt = (prompt_file.read_text(encoding="utf-8").rstrip() + rules_block + "\n\n"
-                   + (KIT / "roles" / tool_rules).read_text(encoding="utf-8"))
+                   + (KIT / "roles" / be.tool_rules).read_text(encoding="utf-8"))
 
     branch_before = git("branch", "--show-current")
     if branch_before in ("main", "master") and a.role != "researcher":   # the researcher never commits
         print(f"RESULT {a.role} ERROR refusing to run on {branch_before}; check out the feature branch"); return 2
     snap = snapshot(protected)
     st = {"role": a.role, "model": model, "test_cmd": test_cmd, "feature": feature, "repo_name": repo.name,
-          "repo": repo.as_posix(), "scratch": scratch.as_posix(), "stamp": stamp, "protected": protected,
-          "snapshot": snap, "out_path": out_path.as_posix(), "ticket": ticket.name if ticket else None}
+          "scratch": scratch.as_posix(), "stamp": stamp, "ticket": ticket.name if ticket else None}
     cut = f" rules={'+'.join(rules_used) or 'none'}"
     if rules_full > tc["rules_max_chars"]:
         cut += f"({round(rules_full / 1000)}k>cap)"
@@ -663,6 +554,9 @@ def main():
     if tc["path"]:
         env["PATH"] = os.pathsep.join(tc["path"] + [env.get("PATH", "")])
     progress_path = runs / f"{stamp}-{a.role}.progress.log"
+    job = {"role": a.role, "prompt": prompt, "role_prompt": role_prompt, "settings": settings, "model": model,
+           "turns": turns, "effort": effort, "runs": runs, "stamp": stamp, "repo": repo.as_posix(),
+           "branch": branch_before, "cfg": cfg, "env": env, "bash": a.role != "researcher", "web": a.web}
 
     # One worker at a time, across planner sessions too: a live lock refuses; a stale one (launcher gone) is replaced.
     held, alive = teamcfg.read_lock(scratch)
@@ -673,84 +567,27 @@ def main():
             "ticket": st["ticket"], "feature": feature, "repo": repo.name, "stamp": stamp, "fmt": teamcfg.RUN_FORMAT}
     write_lock(lock)
     try:
-        if a.role == "researcher":            # after the lock: a refused second dispatch must not overwrite it
-            research_history(prompt_path(a.prompt, "source"),
-                             prompt_path(a.prompt, "out").parent)   # type: ignore[union-attr]  # research_grants checked
-        if backend == "hermes":
-            return run_hermes(st, role_prompt, prompt, runs, cut, cfg, hprofile, effort, turns, env, progress_path,
-                              snap, protected, out_path, lock)
-        return run_claude(st, a.role, settings, role_prompt, prompt, agents_path, model, turns, effort, cut, env,
-                          progress_path, snap, protected, out_path, lock, tools)
+        rsnap = research_snapshot(rpaths) if rpaths else None
+        cmd, st["model"] = be.command(job)
+        print(f"START {a.role} {be.name}:{st['model']}{'/' + effort if effort else ''} max-turns={turns}{cut}"
+              f"{' enforce=' + be.enforce if be.enforce else ''} | progress: {rel(progress_path)}", flush=True)
+        t0 = time.time()
+        d = stream_worker(cmd, progress_path, env, lock)
+        secs = round(time.time() - t0)
+        out_path.write_text(json.dumps(d), encoding="utf-8")
+        r = be.result(d, job)
+        guards = guards_after(snap, protected) + (research_guards(rsnap, rpaths) if rpaths else [])
+        verdict = verdict_of(r["text"], r["subtype"], guards)
+        if r["extra"] and verdict.startswith("PASS"):
+            verdict = f"FAIL {r['extra']} | {verdict}"
+        if stop_requested(lock):
+            verdict = f"FAIL force-stopped | {verdict}"
+        return report(st, verdict, r["turns"], secs, r["usage"], r["cost"], r["denials"], out_path, be.name)
     finally:
         try:
             pathlib.Path(lock["path"]).unlink()
         except OSError:
             pass
-
-
-def run_claude(st, role, settings, role_prompt, prompt, agents_path, model, turns, effort, cut, env, progress_path,
-               snap, protected, out_path, lock, tools=TOOLS):
-    agents_path.write_text(json.dumps({role: {"description": f"{role} worker", "prompt": role_prompt}}),
-                           encoding="utf-8")
-    cmd = ["claude", "-p", prompt, "--agents", str(agents_path), "--agent", role, "--tools", tools,
-           "--settings", json.dumps(settings), "--setting-sources", "", "--model", model,
-           "--max-turns", str(turns), "--output-format", "stream-json", "--verbose", "--no-session-persistence"]
-    if effort:
-        cmd += ["--effort", effort]
-    print(f"START {role} claude:{model}{'/' + effort if effort else ''} max-turns={turns}{cut} | "
-          f"progress: {rel(progress_path)}", flush=True)
-    t0 = time.time()
-    d = stream_worker(cmd, progress_path, env, lock)
-    secs = round(time.time() - t0)
-    out_path.write_text(json.dumps(d), encoding="utf-8")
-    verdict = verdict_of(d.get("result"), d.get("subtype"), guards_after(snap, protected))
-    if stop_requested(lock):
-        verdict = f"FAIL force-stopped | {verdict}"
-    u = d.get("usage") or {}
-    # in = uncached input only; cw/cr = cache write/read. Total prompt size is in+cw+cr (cr is usually the bulk).
-    usage = tuple(u.get(k) for k in ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens",
-                                     "output_tokens"))
-    return report(st, verdict, d.get("num_turns"), secs, usage, d.get("total_cost_usd"),
-                  d.get("permission_denials") or [], out_path, "claude")
-
-
-def run_hermes(st, role_prompt, prompt, runs, cut, cfg, profile, effort, turns, env, progress_path, snap,
-               protected, out_path, lock):
-    """Fallback backend: one headless `hermes -p <profile> chat` run, judged exactly like a claude run.
-
-    measured (Sonnet 5.5, anthropic provider, toy ticket): 28 s, 8 API calls, sessions stay in the worker profile.
-    No allow-list: with the forbidden list in the prompt it refused all 4 forbidden chores; without it, it did all 4.
-    """
-    hmodel = (cfg.get("hermes_models") or {}).get(st["role"])
-    pf = runs / f"{st['stamp']}-{st['role']}.prompt.md"
-    pf.write_text(role_prompt + f"\n\n## Your task\n\nRepo root: {st['repo']} (run every command from there; you are "
-                  f"on branch `{snap['branch']}`).\n\n{prompt}\n", encoding="utf-8")
-    cmd = ["hermes", "-p", profile, "chat", "--query-file", str(pf), "-Q", "--in", st["repo"],
-           "-t", "file,terminal", "--max-turns", str(turns), "--ignore-rules", "--source", "tool",
-           "--format", "stream-json"]
-    if hmodel:
-        cmd += ["-m", hmodel]
-    if cfg.get("hermes_provider"):
-        cmd += ["--provider", cfg["hermes_provider"]]
-    if effort:
-        cmd += ["--reasoning", effort]
-    env.pop("TERMINAL_CWD", None)                # measured: it overrides --in and starts the worker in the home folder
-    print(f"START {st['role']} hermes:{hmodel or profile + '-default'}{'/' + effort if effort else ''} "
-          f"max-turns={turns}{cut} enforce=prompt-only | progress: {rel(progress_path)}", flush=True)
-    t0 = time.time()
-    d = stream_worker(cmd, progress_path, env, lock)
-    secs = round(time.time() - t0)
-    out_path.write_text(json.dumps(d), encoding="utf-8")
-    st["model"] = hmodel or f"{profile}-default"
-    subtype = "success" if d.get("_exit") == 0 else f"exit={d.get('_exit')}"
-    verdict = verdict_of(d.get("text") if "text" in d else d.get("result"), subtype, guards_after(snap, protected))
-    if verdict.startswith("PASS") and d.get("_exit") != 0:     # measured: turn cap = exit 1, model writes its own line
-        verdict = f"FAIL hermes exit={d.get('_exit')} | {verdict}"
-    if stop_requested(lock):
-        verdict = f"FAIL force-stopped | {verdict}"
-    t = d.get("tokens") or {}
-    usage = (t.get("input"), t.get("cache_write"), t.get("cache_read"), t.get("output"))
-    return report(st, verdict, "-", secs, usage, None, [], out_path, "hermes")
 
 
 if __name__ == "__main__":
