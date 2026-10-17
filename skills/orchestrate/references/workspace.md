@@ -4,7 +4,7 @@ Load when the config has `"repos"`: several git repos side by side in a folder t
 out of the repos.
 
 - The workspace holds one `.team.json` with shared keys, `"scratch": ".scratch"`, optional `"glossary"`, and
-  `"repos": {"<folder>": {"test": "..."}}` for per-repo keys. The launcher, `costs.py` and `tickets.py` find it from
+  `"repos": {"<folder>": {"test": "..."}}` for per-repo keys. The launcher, `scratch.py` and `tickets.py` find it from
   inside a repo.
 - One feature folder in the workspace scratch; one feature branch per repo the feature touches (same name).
 - Every ticket has a `Repo:` line (the launcher refuses another cwd); `Blocked by` may cross repos.

@@ -1,64 +1,92 @@
 # Design
 
-Why the team works the way it does. Every mechanism below was run, not assumed; numbers are single samples on a toy
-repo with Claude Code 2.1.296.
+Why the kit (0.14.0) works the way it does. Every mechanism below was run, not assumed; numbers are single samples on
+toy repos (Claude Code 2.1.296 unless noted). Backend details: [backend-claude.md](backend-claude.md),
+[backend-hermes.md](backend-hermes.md).
+
+## Rules for changes
+
+- **Agnostic by default.** The skill and kit work without Claude. Everything Claude-specific sits behind the backend adapter; the planner, tickets, guards and the watch contract never depend on which backend ran.
+- **Don't grow back.** When the planner skips a step, fix the instruction or accept the slip. Add code only when a slip has cost real work more than once. (0.13.7 turned single lapses into refusals and WARNs; 0.14.0 removed them.)
 
 ## Shape
 
-- **Planner** = the Hermes chat session the user talks to. It grills, writes `CONTEXT.md`, ADRs and tickets,
-  dispatches workers, verifies, and never writes product code.
-- **Workers** = headless `claude -p` runs started by `kit/run-worker.py`: dev (one ticket), reviewer (one feature),
-  docs (after review). Serial: one worker at a time, one branch, no worktrees.
-- **Channel** = files in `.scratch/<feature>/` (untracked by the product repo; their own small git repo, decision 25)
-  and the git branch. The planner reads one `RESULT` line
-  per run and a few git commands, never a transcript.
-- **The user merges** (`git merge --no-ff`). No agent merges or deletes branches. Workers never push; the planner
-  pushes only when the user says "switching" (decision 26).
+- **Planner** = the Hermes chat session the user talks to. It grills, writes `CONTEXT.md`, ADRs and tickets, dispatches workers, verifies, and never writes product code. Planning uses Matt Pocock's skills as installed (the 0.2.0 rewrites dropped the scenario and code-cross-check steps and shadowed the upstream names); `orchestrate` adds only the ticket fields (`templates/ticket-header.md.template`) and is the only skill the kit links into Hermes.
+- **Workers** = headless runs started by `kit/run-worker.py`: dev (one ticket), reviewer (one feature), docs (after review), researcher (read-only, outside the product repo). Serial: one worker at a time, one branch, no worktrees.
+- **Channel** = files in `.scratch/<feature>/` (untracked by the product repo, their own small git repo) and the git branch. The planner reads one `RESULT` line per run and a few git commands, never a transcript.
+- **The user merges** (`git merge --no-ff`). No agent merges or deletes branches. Workers never push; the planner pushes only on "switching".
+- **Grill before build**; vertical-slice tickets with ONE test at a pre-agreed seam (keeps each dev run to one commit). **Review before merge**, on two separate axes (Spec, Standards) so one cannot hide the other: a reviewer run after the merge saw an empty diff.
 
-## Decisions
+## Backends and adapter
 
-| # | Decision | Why |
-|---|---|---|
-| 1 | Workers are `claude -p`, not Hermes profiles | Headless Hermes auto-approves every command, so nothing enforces a worker's limits. A Hermes provider that wraps Claude Code turns Claude Code's own tools off, so its allow-lists cannot guard a Hermes worker. Direct `claude -p` can be enforced and was ~5x faster (8-22 s vs 92 s for the same trivial ticket). |
-| 2 | Deny by default (`defaultMode: dontAsk`) + per-role allow-list | A string-matching hook was bypassed with `python -c subprocess`; the allow-list blocked every bypass, including compound commands. |
-| 3 | `--setting-sources ""` and `--agents <file>` | Ignores user and project settings, so a repo's `.claude/settings.json` cannot widen a worker (measured: a hostile `Bash(*)` was ignored). Role prompts come from the kit, not the project. |
-| 4 | The launcher parses the last `RESULT:` line | `claude -p` exits 0 even when a worker gives up. Only the turn cap exits 1. |
-| 5 | Launcher guards: main unmoved, branch unchanged, old HEAD still an ancestor | Catches what a prefix rule cannot (`git commit -m x --amend` matched the allowed commit prefix; the guard caught it). Refuses to start on main/master. |
-| 6 | Grant writes with `Edit(path)` rules, never `Write(path)` | `Edit` rules govern both tools; a `Write(...)` allow rule granted nothing. Deny rules beat allow rules. |
-| 7 | Every role prompt ends with the same tool rules | Without "one command per Bash call, no cd/&&", workers chained commands, were denied, and quit. With them: 0 denials. |
-| 8 | `--test-cmd` adds one exact command to the allow-list and names it in the prompt | Without the prompt line, the reviewer ran a narrower command and was denied. |
-| 9 | No Co-Authored-By trailer, ever | The launcher forces `includeCoAuthoredBy: false` and empty `attribution` (measured: the trailer appears by default and is gone with either key). |
-| 10 | Models: dev and reviewer on Sonnet, docs on Haiku | Haiku did the docs job correctly in 7 s for about $0.006 list price. |
-| 11 | Grill before build; vertical-slice tickets with ONE test at a pre-agreed seam | From mattpocock/skills; keeps each dev run to one commit. |
-| 12 | Review before merge, on two separate axes (Spec, Standards) | A reviewer run after the merge saw an empty diff. Axes stay separate so one cannot hide the other. |
-| 13 | Dev notes: workers append to `.scratch/dev-notes.md`; the planner promotes approved facts to `docs/dev-notes.md` with the user's say-so | Later runs reuse what earlier runs learned without polluting the repo with unreviewed text. |
-| 14 | Every run logs one line to `.scratch/runs.log` | Turns, seconds, tokens, list price, denials: enough to see cost and drift without transcripts. Tokens are logged as four fields (uncached input, cache write, cache read, output) because `input_tokens` alone is misleading: measured on a Haiku dev run, `input_tokens` = 24 while cache write was 33.5k and cache read 366.8k. |
-| 15 | The launcher inlines the project's `CLAUDE.md` (and its `@` imports) into the worker prompt | Measured: with `--setting-sources ""` a worker does not see `CLAUDE.md` at all (codeword test: NONE vs found with `project`). An `@../other-repo/CLAUDE.md` import points outside the repo, where the worker may not read. With inlining, a worker followed a naming rule that lived only in the imported file. |
-| 16 | The dev may not edit files that decide what the test command runs (`package.json`, lockfiles, jest/vitest/tsconfig, `.team.json`, plus `.team.json` `protected`): deny rule `Edit(**/<name>)` plus a post-run guard | Stops a dev from making tests pass by changing what runs (the `test` script, jest `testMatch`, skipped folders). It does NOT close the code-execution hole: the dev still writes the test files, and they run anything. Also unprotected by default: `conftest.py`, jest `setupFiles`, scripts a test script calls (`node scripts/test.js`); add those to `.team.json` `protected`. Measured: the deny blocked root and nested files for Edit and Write; the guard (`FAIL guard:test-config-changed`) caught a committed change. |
-| 17 | Planning uses Matt Pocock's skills as installed, not rewrites | The 0.2.0 rewrites dropped the scenario and code-cross-check steps and shadowed the upstream names. The team only needs extra ticket fields, which `orchestrate` adds from `templates/ticket-header.md.template`. |
-| 18 | Browser-based projects: browser checks run as the test command (headless Playwright), not as a worker tool | Workers load no MCP servers (`--setting-sources ""`) and run only one test command, so the Playwright config's `webServer` must start the app. Measured: dev wrote a browser test, saw it red then green, PASS in 35 s; reviewer ran it and PASSed in 15 s; 0 denials, no launcher change. Assertions only: visual/UX checks stay with the planner. `playwright.config.*` and the server script must be added to `.team.json` `protected` (the dev's deny on them was configured but not exercised). |
-| 19 | Multi-repo workspace: one workspace `.team.json` with a `repos` map, scratch outside the repos, `Repo:` per ticket | Some teams keep agent files out of shared repos. The worker gets the scratch folder by absolute-path rules (`Read(//abs/**)`, `Edit(//abs/**)`), measured to work without `--add-dir` while the sibling repo stayed denied. One worker, one repo, one branch per run is unchanged; batches stay inside one repo so a review diff has one base. |
-| 20 | Worker rules are capped (`rules_max_chars`, default 40000) and may come from a short `rules` file | A 150k-char CLAUDE.md was pasted into every run. Cut text ends with a pointer to the full file; measured: the worker Grepped it for a line past the cut. |
-| 22 | Workers are backend-agnostic: claude by default, a headless Hermes worker profile as the fallback (`backend` auto/claude/hermes, per role) | Not every machine has Claude. Measured on Sonnet 5.5 (anthropic provider): 28 s vs 27 s for `claude -p` on the same ticket, about a quarter of the cached prompt tokens, sessions kept out of the user's chat list. The first Hermes spike (92 s) was slow because of the claude-subscription plugin, not Hermes. |
-| 23 | Hermes workers are labelled `enforce=prompt-only` and judged by the same after-run guards | `-t file,terminal` blocks nothing inside the shell and headless approvals were off. With the forbidden list in the prompt the worker refused all 4 forbidden chores; without it, it checked out main and back, wrote outside the repo, edited package.json and pushed. |
-| 24 | New guard for both backends: `git ls-remote` per remote before and after, `FAIL guard:pushed:<remote>` on any change | A push was the one forbidden action no earlier guard caught. Measured: a push during a Claude run turned a worker PASS into `FAIL guard:pushed:origin`. An unreadable remote (offline, no auth) is skipped, not failed. |
-| 25 | No handoff file: a new planner session (or another machine) rebuilds state from tickets, `batches.md`, reviews, `runs.log`, git and a `decisions.md` per feature; the scratch folder is its own git repo | A summary goes stale (the old handoff note grew to 104 lines, partly marked obsolete). The files are the state already; only chat-made decisions were missing, so they get one line each in `decisions.md`, written when made. The scratch repo lets the state travel without putting agent files on the product branch. `scratch.py resume` reads an `in-progress` ticket three ways: a commit ending `(<ticket file>)` = verify, none + clean tree = redispatch, dirty tree = ask (never reset or stash). Measured with two clones as two machines: 33/33 checks, real dev runs. |
-| 26 | The planner pushes only on "switching": the scratch repo and the feature branch(es), never main, never `--force`, never while a worker runs, never with uncommitted product changes. Workers never push (the `pushed` guard stays) | The user moves between machines mid-feature. Routine per-ticket pushes were rejected (not wanted). Divergence is never merged: `resume` pulls fast-forward only and stops with both sides shown; a rejected push is reported, not forced. Measured: diverged scratch -> `RESUME STOP`, no merge commit; the push rejected, not forced. |
-| 27 | A worker lock (`<scratch>/runs/worker.lock`) holds the launcher and worker pids; `scratch.py stop` kills the worker tree and logs `force-stopped` | "One worker at a time" was a prompt rule only; a second planner session could break it. The lock refuses a second dispatch and a switch mid-run. Measured: second dispatch refused, switch refused, stop turned the run into `FAIL force-stopped` in runs.log, ticket stayed `in-progress`, and the next resume on the other machine said REDISPATCH. |
-| 28 | Shared repos: the kit stays the user's personal workflow; it adds nothing team-visible but the feature's code | Teammates may use no tests or another AI workflow. Glossary, ADRs, dev notes and config live outside the repo. Main is brought in only between batches, by merge (no history rewrite, so guards and pushed branches stay valid); the merge commit becomes the next batch's base, so reviews never include teammates' code. A pre-feature `baseline` keeps main's existing red tests from failing workers. Measured (`tests/shared_repo.py`, 24/24). |
-| 29 | `guard:pushed` counts refs added or moved to commits that exist in the worker's clone, and remote branches deleted whose tracking ref vanished during the run or which are local branches | In a shared repo a teammate's push changed `ls-remote` and failed an honest worker. A worker's own push can only point at commits it has; the launcher does not fetch during a run. 0.12.0 checked moved refs only, so `git push --delete` passed (measured, `tests/push_guard.py`); deletions came back in 0.12.3. Gap: a deletion by URL of a teammate's branch. |
-| 30 | The worker lock is alive while the launcher or the worker runs | Measured on Linux: a SIGKILLed launcher left its worker running (it has its own session so `stop` can kill its group), the lock read as stale and a second dispatch started beside it. |
-| 31 | Dev: reuse first (codebase, stdlib, installed dependency, one line, minimum), searched before writing; scope stays the planner's | From ponytail's ladder, minus its rung 1 ("does it need to exist"): a dev that cannot ask would drop what the user wanted. Measured: with "reuse first" alone the dev still hand-rolled money formatting next to an existing `fmt_money`; an explicit "search before writing" step fixed it (`tests/ponytail_ideas.py`). |
-| 32 | Reviewer reads beyond the diff (callers of changed symbols, about 10 files) and checks reuse; 35 turns | A renamed field broke an untested file outside the diff while every test passed; the reviewer caught it at `report.py:2`, and flagged a missed helper with its file:line. |
-| 33 | Dev Result and review end with `Not checked:`; the planner shows it | The user sees each ticket's gaps without transcripts. |
-| 34 | A read-only `researcher` role: code only, Claude backend only, questions approved first, findings cite path:line, the planner recommends | Vague "is X worth learning" asks got vague answers. Read-only must be enforced, so the Hermes backend is refused. Measured: a source whose AGENTS.md told agents to write files and commit was reported, not obeyed (`tests/researcher.py`). |
-| 35 | Research home: `HDT_RESEARCH_HOME`, else `~/research`; clones in `src/` (git-ignored, kept until done) | Same default on every OS; OneDrive-redirected folders, AppData (pruned) and paths with spaces break git or allow-list rules. |
-| 36 | Glob patterns start with `**/`; one empty Glob never proves absence | Measured on Windows, Claude Code 2.1.296: Glob with a `path` and pattern `benchmarks/**/*` returned nothing for an existing folder (with or without .gitignore); `**/benchmarks/**` found it. The researcher had called ponytail's benchmark results absent. |
-| 37 | `git log/diff/show` only through `kit/git-ro.py`; the researcher has no Bash; guard on hooks and git config | Measured (Linux, Claude Code 2.1.296): `Bash(git log:*)` allowed `git log --output=<path>` with 0 denials and it wrote into `.git/hooks/` despite `Edit(./.git/**)`. A prefix rule cannot stop trailing flags (see 8 for `--amend`), so a wrapper refuses them and a fingerprint of hooks/config catches what slips past. |
-| 38 | Every git call on an untrusted repo (research source, worker read-only git) runs with `teamcfg.GIT_SAFE` + `--no-ext-diff --no-textconv`; history.txt only for a repo's top level, written after the lock | Measured (git 2.53 Windows): a source's config ran a program on the launcher's plain `git log` (gpg.program via a signed commit) and on `git diff` (diff.external, core.fsmonitor, textconv); with the overrides none ran (`tests/git_guard.py`). `git -C <subfolder>` walks up and gave the enclosing repo's history under the subfolder's name. |
-| 39 | The run files are a contract owned by the kit: `docs/watch-contract.md`, `RUN_FORMAT` (`fmt=`), samples in `tests/fixtures/watch/` from the real writers | hermes-dev-watch parses them; a silent kit change would drop runs there unnoticed. The kit-side test fails before commit, the watcher's CI parses the kit's samples nightly, and `fmt` lets an old watcher say "update me" instead of misreading. A copy of the watcher's parser in the kit was rejected (goes stale). |
-| 40 | The planner's own actions are logged by the commands it must run: `scratch.py status`/`fix`/`rewrite`/`decide` write a `planner` runs.log line (+ progress log), refuse a skipped Verify record or a FAIL without a planner fix ticket, and `resume`/`tickets.py` WARN on what slipped past. No new role | The user missed planner reports that lived only in chat (fix tickets written without a `decide` line, status edits with `sed`, a revert). Skill rules alone had been skipped ("decide at once"), so the record is a side effect of required commands. A verifier role was rejected: running the page cannot be held by an allow-list, and logging does not need it. hermes-dev-watch shows the lines with no change except its "today" counts. Design: `docs/open/planner-log.md`; `tests/planner_log.py`. |
-| 21 | `Test command` must be cheap and safe; anything needing a server, DB, or the user's say-so is a planner-run `Verify:` | A worker cannot ask, and a project rule may forbid DB operations without the user's yes in that turn. |
+| Rule | Why (measured) |
+|---|---|
+| `kit/backends.py` has one class per backend (`Claude`, `Hermes`) with `ready`, `setup_error`, `command`, `progress`, `result`; `run-worker.py` is backend-neutral. `backend` = auto/claude/hermes, per role; auto picks Claude when logged in (no model call), else Hermes | Not every machine has Claude. Only `claude -p` gets an allow-list that blocks a call before it runs, so auto prefers it. Hermes on Sonnet 5.5 (anthropic provider): 28 s vs 27 s for `claude -p` on the same ticket, about a quarter of the cached prompt tokens, sessions out of the user's chat list. The first Hermes spike (92 s, ~5x slower) was slow because of the claude-subscription plugin, not Hermes. |
+| `tests/backend_smoke.py <backend>`: one trivial ticket per backend, on demand (calls a model) | Hermes had 0 runs across four projects; the unused path must be known to work before it is needed. |
+| Claude: deny by default (`defaultMode: dontAsk`) + per-role allow-list | A string-matching hook was bypassed with `python -c subprocess`; the allow-list blocked every bypass, compound commands included. |
+| Claude: `--setting-sources ""` and `--agents <file>` | A repo's `.claude/settings.json` cannot widen a worker (a hostile `Bash(*)` was ignored). Role prompts come from the kit. |
+| Claude: grant writes with `Edit(path)`, never `Write(path)`; deny beats allow | `Edit` rules govern both tools; a `Write(...)` allow rule granted nothing. |
+| Every role prompt ends with the backend's tool rules (`_tool-rules.md` / `_tool-rules-hermes.md`) | Claude: without "one command per Bash call, no cd/&&", workers chained commands, were denied and quit; with them, 0 denials. Hermes: with the forbidden list the worker refused all 4 forbidden chores; without it, it checked out main and back, wrote outside the repo, edited package.json and pushed. |
+| Hermes runs are tagged `enforce=prompt-only` and judged by the same after-run guards | `-t file,terminal` blocks nothing inside the shell and headless approvals are off. The guards are the only enforcement on every backend. |
+| `--test-cmd` adds one exact command to the allow-list and names it in the prompt | Without the prompt line, the reviewer ran a narrower command and was denied. |
+| No Co-Authored-By trailer, ever: forced `includeCoAuthoredBy: false` and empty `attribution` | The trailer appears by default and is gone with either key. |
+| Models: dev and reviewer on Sonnet, docs on Haiku (`models` for Claude, full provider ids in `hermes_models`) | Haiku did the docs job correctly in 7 s for about $0.006 list price. |
+| The launcher pastes the project's `CLAUDE.md` (and its `@` imports) into the prompt, capped by `rules_max_chars` (40000), or a short `rules` file | With `--setting-sources ""` a worker does not see `CLAUDE.md` (codeword test: NONE vs found with `project`); an `@../other-repo/CLAUDE.md` import points where the worker may not read. With the paste, a worker followed a rule that lived only in the imported file. A 150k-char CLAUDE.md was pasted into every run; cut text ends with a pointer, and the worker Grepped the full file for a line past the cut. |
+| Glob patterns start with `**/`; one empty Glob never proves absence | Windows: Glob with a `path` and `benchmarks/**/*` returned nothing for an existing folder; `**/benchmarks/**` found it. The researcher had called existing results absent. |
+
+## Guards
+
+After every run, on every backend, `run-worker.py` compares a snapshot and turns a worker PASS into `FAIL guard:<name>`.
+
+| Guard / rule | Why (measured) |
+|---|---|
+| Verdict = the last `RESULT:` line, plus any non-zero exit | `claude -p` exits 0 when a worker gives up; only the turn cap exits 1. On Hermes a turn cap exits 1 while the model still writes its own RESULT line. |
+| Main unmoved, branch unchanged, old HEAD still an ancestor (`history-rewritten`); refuses to start on main/master | `git commit -m x --amend` matched the allowed commit prefix; the guard caught it. |
+| `test-config-changed`: the dev may not edit what decides what the test command runs (`package.json`, lockfiles, jest/vitest/tsconfig, `.team.json`, plus `.team.json` `protected`); Claude also gets deny `Edit(**/<name>)` | Stops making tests pass by changing what runs. The deny blocked root and nested files for Edit and Write; the guard caught a committed change. Not protected by default: `conftest.py`, jest `setupFiles`, scripts a test script calls, `playwright.config.*` and its server script: add them to `protected`. |
+| `pushed:<remote>`: `git ls-remote` before and after; counts refs added or moved to commits in the worker's clone, and remote branches deleted whose tracking ref vanished or which are local branches. An unreadable remote is skipped | A push was the one forbidden action nothing else caught (a push during a run turned PASS into `FAIL guard:pushed:origin`). In a shared repo a teammate's push failed an honest worker, hence "commits it has" (no fetch during a run). 0.12.0 checked moved refs only and `git push --delete` passed (`tests/push_guard.py`). |
+| `git log/diff/show` only through `kit/git-ro.py` (refuses writing flags, runs with `teamcfg.GIT_SAFE` + `--no-ext-diff --no-textconv`); fingerprint of hooks and git config | `Bash(git log:*)` allowed `git log --output=<path>` with 0 denials and wrote into `.git/hooks/` despite `Edit(./.git/**)`. A repo's own config ran a program on plain `git log` (gpg.program via a signed commit) and on `git diff` (diff.external, core.fsmonitor, textconv); with the overrides none ran (git 2.53 Windows, `tests/git_guard.py`). |
+| Researcher: `source-changed` (every file of the source, `.git` included, fingerprinted without running git) and `topic-folder-changed` (anything but the findings file) | Lets the read-only role run on Hermes, where nothing blocks a write; running no git on the source avoids its config running code. |
+| `Test command` must be cheap and safe; anything needing a server, a DB or the user's say-so is a planner-run `Verify:` | A worker cannot ask, and a project rule may forbid DB operations without the user's yes in that turn. |
+| Browser projects: headless Playwright as the test command, its `webServer` starting the app | Workers load no MCP servers. Dev wrote a browser test, red then green, PASS in 35 s; reviewer PASS in 15 s; 0 denials, no launcher change. Visual/UX checks stay with the planner. |
+
+## State, resume and switching
+
+| Rule | Why (measured) |
+|---|---|
+| No handoff file: a new session (or machine) rebuilds state from tickets, `batches.md`, reviews, `runs.log`, git and a per-feature `decisions.md` (one line per chat-made decision); the scratch folder is its own git repo | A summary goes stale (the old handoff note grew to 104 lines, partly obsolete). `scratch.py resume` reads an `in-progress` ticket three ways: commit ending `(<ticket file>)` = verify, none + clean tree = redispatch, dirty tree = ask (never reset or stash). Two clones as two machines: 33/33 checks, real dev runs. |
+| The planner pushes only on "switching": the scratch repo and feature branch(es), never main, never `--force`, never mid-run or with uncommitted product changes. `resume` pulls fast-forward only | The user moves machines mid-feature; routine pushes were not wanted. Diverged scratch -> `RESUME STOP`, no merge commit; a rejected push is reported, not forced. |
+| Worker lock (`runs/worker.lock`) holds launcher and worker pids, alive while either runs; `scratch.py stop` kills the worker tree and logs `force-stopped` | "One worker at a time" was a prompt rule a second session could break. Second dispatch and a mid-run switch refused; stop gave `FAIL force-stopped`, ticket stayed `in-progress`, the other machine's resume said REDISPATCH. A SIGKILLed launcher left its worker running and a launcher-only lock read as stale (Linux). |
+| Every run logs one `runs.log` line: turns, seconds, four token fields (uncached in, cache write, cache read, out), list price, denials | Enough to see cost and drift without transcripts. `input_tokens` alone misleads: a Haiku dev run had 24 while cache write was 33.5k and cache read 366.8k. |
+| Dev notes: workers append to `.scratch/dev-notes.md`; the planner promotes approved facts to `docs/dev-notes.md` with the user's say-so | Later runs reuse what earlier runs learned without unreviewed text in the repo. |
+| Shared repos: nothing team-visible but the feature's code; main comes in only between batches, by merge; a pre-feature `baseline` | Teammates may use no tests or another workflow. No history rewrite keeps guards and pushed branches valid; the merge commit is the next batch's base, so reviews never include teammates' code; the baseline keeps main's red tests from failing workers (`tests/shared_repo.py`, 24/24). |
+| Multi-repo workspace: one `.team.json` with a `repos` map, scratch outside the repos, `Repo:` per ticket, batches inside one repo | The scratch folder is granted by absolute-path rules (`Read(//abs/**)`), which worked without `--add-dir` while the sibling repo stayed denied. |
+| Dev: reuse first (codebase, stdlib, installed dependency, one line, minimum) with an explicit search-before-writing step; scope stays the planner's | With "reuse first" alone the dev still hand-rolled money formatting next to an existing `fmt_money`; the search step fixed it (`tests/ponytail_ideas.py`). Ponytail's "does it need to exist" rung was dropped: a dev that cannot ask would drop what the user wanted. |
+| Reviewer reads beyond the diff (callers of changed symbols, about 10 files) and checks reuse; 35 turns | A renamed field broke an untested file outside the diff while every test passed; the reviewer caught it at `report.py:2` and flagged a missed helper by file:line. |
+| Dev Result and review end with `Not checked:`; the planner shows it | The user sees each ticket's gaps without transcripts. |
+
+## Researcher
+
+- A read-only worker on either backend: questions or a **survey** ("map this repo", "find every place X is done"), approved first; findings cite path:line and end with a required `## Coverage` section (folders read, folders skipped); the planner recommends. Why: vague "is X worth learning" asks got vague answers, and a fresh worker with a full context budget reads more than the planner. Orchestrate dispatches it when an answer needs more than a few files or a whole folder.
+- Claude: only Read/Glob/Grep plus `Edit(<findings file>)`, no Bash. Hermes: toolset `file` only (no terminal), held by the `source-changed` and `topic-folder-changed` guards. A source whose AGENTS.md told agents to write files and commit was reported, not obeyed (`tests/researcher.py`).
+- The launcher runs no git on a research source (no `history.txt`); `GIT_SAFE` remains only for `git-ro.py`.
+- Home: `HDT_RESEARCH_HOME`, else `~/research`; clones in `src/` (git-ignored, kept until done). Same default on every OS; OneDrive-redirected folders, AppData (pruned) and paths with spaces break git or allow-list rules.
+
+## Planner trail
+
+`scratch.py status <feature> NN <status> [--verify "PASS|FAIL|SKIP: <text>"]` and `scratch.py decide` each write one
+`planner` line in `runs.log` (`action=status|decide`), same shape as a worker's, so hermes-dev-watch shows it unchanged.
+Why: the user missed planner reports that lived only in chat, and skill rules alone had been skipped, so the record is
+a side effect of commands the planner must run anyway. They refuse only a malformed `--verify`, an unknown status or
+an unknown ticket. No progress log; the scratch repo's git log is the timeline. A verifier role was rejected: running
+the page cannot be held by an allow-list, and logging does not need it. Test: `tests/planner_log.py`.
+
+## Watch contract
+
+The run files (`runs.log`, `runs/<id>.progress.log`, `runs/worker.lock`) are owned by the kit: spec in
+[watch-contract.md](watch-contract.md), `RUN_FORMAT` (`fmt=`), samples in `tests/fixtures/watch/` from the real writers.
+hermes-dev-watch parses them, so a silent kit change would drop runs there unnoticed: `tests/watch_contract.py` fails
+before commit, CI runs the watcher's parser on the samples, and `fmt` lets an old watcher say "update me". A copy of
+the watcher's parser in the kit was rejected (goes stale).
 
 ## Measured (end to end, toy repo)
 
@@ -72,29 +100,28 @@ repo with Claude Code 2.1.296.
 
 ## Known holes
 
-- Protected-file matching is by file name. A test runner configured somewhere else (e.g. a custom script path) needs that file in `.team.json` `protected`.
-
 - The test command executes code the dev wrote, so a dev can run anything through it. Review before merge is the defence.
-- Hermes backend: no allow-list. A write outside the repo, or a branch switch that switches back, is not caught;
-  only the prompt rules stop them. Review before merge is the defence, as for the test command.
+- Protected-file matching is by file name; a test runner configured elsewhere needs that file in `.team.json` `protected`.
+- Hermes backend: no allow-list. A write outside the repo, scratch and source folders, or a branch switch that switches back, is not caught (dev or researcher); only the prompt rules stop them.
 - Amend is detected after the fact, not prevented; recovery is `git reflog`.
-- Prices in the log are list price; a subscription seat is billed differently.
-- `resume` matches a finished ticket by the dev's commit subject ending `(<ticket file>)`. A hand commit with that
-  ending, or a dev that changed the format, misleads it (VERIFY when the dev never finished; step 6 still checks).
-- The scratch repo holds tickets and `runs.log` only; `runs/` (result JSON, progress logs) stays on the machine
-  that ran the worker, so `costs.py --backfill` cannot fill old lines from the other machine.
+- `pushed`: a deletion by URL of a teammate's branch is not caught.
+- `runs.log` prices are list price; a subscription seat is billed differently (hermes-dev-watch shows them as `list$`).
+- `resume` matches a finished ticket by a commit subject ending `(<ticket file>)`; a hand commit with that ending, or a dev that changed the format, misleads it (verification still runs).
+- `runs/` (result JSON, progress logs) stays on the machine that ran the worker; the scratch repo carries only tickets and `runs.log`.
 
 ## Rejected
 
-- **Four Hermes profiles with per-profile plugin installs:** no enforcement in headless runs, about 5x slower, and setup
-  that touched each profile's environment.
+- **Four Hermes profiles with per-profile plugin installs:** no enforcement in headless runs, about 5x slower, setup that touched each profile's environment.
 - **Hermes Kanban dispatcher:** spawns only Hermes profiles, so it cannot run enforced `claude -p` workers.
-- **Hermes `delegate_task` subagents as the fallback worker:** one global `delegation.model` for every role, a
-  three-step prepare/delegate/finish flow for the planner, and child sessions in the user's own profile. Replaced by
-  a headless run in a worker profile with `-m` per role.
+- **Hermes `delegate_task` subagents as the fallback worker:** one global `delegation.model`, a three-step planner flow, child sessions in the user's profile. Replaced by a headless run in a worker profile with `-m` per role.
 - **String-matching PreToolUse hooks:** bypassed in the first test.
-- **Installer scripts:** a clone plus three copied skill folders is enough.
+- **Installer scripts:** a clone plus linked skill folders is enough.
 - **A handoff/summary file for resume:** goes stale; state is rebuilt from the files plus `decisions.md`.
-- **Committing `.scratch/` on the feature branch:** puts agent files in the product history or needs stripping before
-  merge; a separate scratch repo does not.
+- **Committing `.scratch/` on the feature branch:** puts agent files in product history; a separate scratch repo does not.
 - **Routine pushes after every ticket:** pushes only on "switching".
+- **Planner refusals, WARNs, `fix`/`rewrite`/`--step`:** policing, not logging (thin-down 2026-10-17).
+- **Researcher Claude-only:** now guard-enforced on Hermes.
+- **`history.txt` for research sources:** made the launcher run git on hostile sources.
+- **`kit/costs.py`:** list price is not subscription billing; the watcher shows `list$`.
+- **`claude-p-role-workers` as a skill:** vendor-specific; now `docs/backend-claude.md`.
+- **Sandbox/container mode:** considered, skipped.

@@ -1,9 +1,10 @@
 # hermes-dev-team
 
 A small dev team for [Hermes Agent](https://hermes-agent.nousresearch.com/docs): you talk to a planner in Hermes, and it
-starts headless [Claude Code](https://docs.anthropic.com/en/docs/claude-code) workers (dev, reviewer, docs, researcher) one at a
-time. Each worker runs under a deny-by-default allow-list, so no single session carries all the context and no worker
-can switch branches, push, or write outside the repo.
+starts headless workers (dev, reviewer, docs, researcher) one at a time, on
+[Claude Code](https://docs.anthropic.com/en/docs/claude-code) or, without Claude, on a Hermes worker profile. On Claude
+each worker runs under a deny-by-default allow-list; on both backends the launcher checks the repo after every run, so
+a worker that switched branches, pushed or rewrote history FAILs.
 
 **Status:** the kit has run end to end on a toy repo (dev, reviewer and docs all PASS) and blocked 8 of 8 forbidden
 actions; see [docs/design.md](docs/design.md). The researcher passed a planted-instruction test and a real run on
@@ -12,16 +13,18 @@ a public repo (0.13.0). It has not yet been used on a real project.
 ## What is here
 
 - [TEAM.md](TEAM.md): the roles on one page.
-- `kit/run-worker.py`: the launcher. `kit/roles/<role>.md` + `<role>.json`: each worker's prompt and permissions.
+- `kit/run-worker.py`: the launcher and its after-run guards. `kit/backends.py`: everything backend-specific (claude,
+  hermes). `kit/roles/<role>.md` + `<role>.json`: each worker's prompt and Claude allow-list.
 - `kit/scratch.py`: resume in a new session or on another machine, force-stop a worker, switch machines.
 - `kit/research.py`: the research home (clone a repo to study, create a topic, delete the clone when done).
-- `skills/`: two Hermes skills for the planner (orchestrate, claude-p-role-workers).
+- `skills/orchestrate`: the planner's one Hermes skill. Backend notes for maintainers: [docs/backend-claude.md](docs/backend-claude.md),
+  [docs/backend-hermes.md](docs/backend-hermes.md).
 - Planning uses [Matt Pocock's skills](https://github.com/mattpocock/skills) as-is, installed from the Hermes skill hub
   (not vendored, so they keep updating): grill-with-docs, grilling, domain-modeling, to-tickets.
 - [LEARN.md](LEARN.md): a prompt to paste into Hermes on another machine so it installs and learns this repo.
 - [EXISTING-PROJECTS.md](EXISTING-PROJECTS.md): turning on resume + machine switching for a project that used the kit before 0.11.0, per machine.
 - [CHANGELOG.md](CHANGELOG.md): every skill, role, or launcher change; marks what to re-copy after `git pull`.
-- [docs/design.md](docs/design.md): decisions, measurements, and what was rejected.
+- [docs/design.md](docs/design.md): how the kit works and why (measured), and what was rejected.
 - [docs/benchmarks.md](docs/benchmarks.md): every measured run (time, calls, tokens, cost) per backend and model.
 - [docs/testing.md](docs/testing.md) + `tests/`: the repeatable tests (guards, resume, force-stop, switching, shared repos, worker
   behaviour, researcher), what they check, results.
@@ -100,18 +103,18 @@ the root, one feature branch.
 - One feature branch per repo (same name). A review batch holds tickets of one repo only. `Blocked by` may cross repos.
 - `glossary` names one shared glossary that reviewer and docs read; it is never committed into a repo.
 - Merge order is yours: the upstream repo first (e.g. `api` before `web`).
-- `costs.py` and `tickets.py` find the workspace config from inside any of its repos.
+- `scratch.py` and `tickets.py` find the workspace config from inside any of its repos.
 
-Every run appends to `.scratch/runs.log`; `python KIT/costs.py --by-role` totals it per feature: runs, turns,
-minutes, input / cache write / cache read / output tokens, cache hit %, list price, denials (`--backfill` adds the
-token columns to runs logged before 0.8.0).
+Every run appends one line to `.scratch/runs.log` (turns, seconds, tokens, list price, denials), which
+[hermes-dev-watch](https://github.com/LastNyx/hermes-dev-watch) shows live.
 Commits never get a Co-Authored-By trailer.
 
 ## Research
 
-Ask the planner how some code works, or whether a repo is worth learning: it writes 3-6 questions, you approve them,
-and a read-only `researcher` worker answers each with `path:line` citations in one findings file (never running
-the source's code; its numbers are "claimed, not run"). The planner gives the recommendation. Research outside a
+Ask the planner how some code works, whether a repo is worth learning, or to search a whole repo ("every place that
+does X"): it writes 3-6 questions or a survey scope, you approve them, and a read-only `researcher` worker answers
+with `path:line` citations and a coverage list (folders read and skipped) in one findings file (never running the
+source's code or git; its numbers are "claimed, not run"). It runs on either backend. The planner gives the recommendation. Research outside a
 project lives in a research home: `HDT_RESEARCH_HOME`, else `~/research` (keep it out of OneDrive, AppData, and
 paths with spaces); `python KIT/research.py init`, `clone <url>`, `topic <name>`, `done <name>`. See the orchestrate
 skill's `references/research.md`.
@@ -136,7 +139,7 @@ python KIT/scratch.py switch                        # you say "switching": push 
 python KIT/scratch.py init --clone <private-url>    # first time on the other machine
 python KIT/scratch.py stop                          # force-stop the running worker
 python KIT/scratch.py status <feature> NN review --verify "PASS: ..."   # planner: Status + Verify, logged
-python KIT/scratch.py fix <feature> NN-fix-x --for NN "<what was seen>" # planner: its own fix ticket, logged
+python KIT/scratch.py decide <feature> "<what you decided>"             # planner: a chat decision, logged
 ```
 
 A project that used the kit before 0.11.0: follow [EXISTING-PROJECTS.md](EXISTING-PROJECTS.md) on each machine.
@@ -157,11 +160,14 @@ reach. The dispatch command is the same; the launcher picks.
 | | claude (default) | hermes (fallback) |
 |---|---|---|
 | Blocked while running | deny-by-default allow-list | nothing: prompt rules only (`enforce=prompt-only`) |
-| Caught after the run | main moved, branch changed, history rewritten, protected file changed, pushed | the same |
+| Caught after the run | main moved, branch changed, history rewritten, protected file changed, git hooks/config changed, pushed; researcher: source changed, extra file written | the same |
 | Not caught | - | a write outside the repo; a checkout that switches back |
 | Model | `models` (`sonnet`, `haiku`) | `hermes_models` (the provider's full id), else the profile default |
 | Effort | `effort` -> `--effort` | `effort` -> `--reasoning` |
-| Cost in `costs.py` | list price | tokens only (`$` unknown); shown as `<role>@hermes` |
+| Cost in `runs.log` | list price | tokens only (`list$=None`) |
+
+`python tests/backend_smoke.py` runs one trivial ticket on each backend that is set up (it calls a model): run it on a
+new machine and after a kit change, so the fallback is known to work before you need it.
 
 Every key is optional; a project needs only `test`. Full example:
 
@@ -189,7 +195,7 @@ hermes -p hdt-worker chat -q "reply OK" -Q    # first run installs dependencies 
 ```
 
 Worker sessions are tagged `--source tool` and stay in that profile, out of your chat list. Each run also makes one
-small title-generation call that `costs.py` does not count.
+small title-generation call that `runs.log` does not count.
 
 ## When a skill grows
 

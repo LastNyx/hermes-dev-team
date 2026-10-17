@@ -49,9 +49,8 @@ def main():
           (pln.get("model"), pln.get("verdict"), pln.get("turns"), pln.get("cost"), pln.get("ticket"))
           == ("planner", "FAIL verify 01: the sum is blank", "-", None, "01-mul.md"), pln)
     pp = core.progress(FIXTURES, "20261016-121500-planner", 0)
-    check("watcher reads the planner's progress log (say: steps, then the change)",
-          isinstance(pp, dict) and "say: loaded the page" in pp.get("text", "")
-          and "status 01 in-progress -> review" in pp.get("text", ""), pp)
+    check("a planner line has no progress log: the watcher returns an empty log, not an error",
+          isinstance(pp, dict) and pp.get("text") == "", pp)
 
     p = core.progress(FIXTURES, "20261016-120000-dev", 0)
     text = p.get("text", "") if isinstance(p, dict) else ""

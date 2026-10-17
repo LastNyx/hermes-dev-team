@@ -1,6 +1,8 @@
 # Changing the team skills
 
-Load before patching `orchestrate` or `claude-p-role-workers` (or any file under them).
+Load before patching `orchestrate` (or any file under it), a role file, or the launcher. Backend details live in the
+team repo, not in a skill: `docs/backend-claude.md` (allow-list rules, each measured) and `docs/backend-hermes.md`
+(prompt-only limits, which guards apply). After a launcher or backend change, run `tests/backend_smoke.py`.
 
 - The team skills are linked into the team repo, so any `skill_manage` edit is an uncommitted change there. Before
   patching one, show the user the proposed change in one or two lines and wait for a yes. Keep it general: no project
@@ -14,8 +16,13 @@ Load before patching `orchestrate` or `claude-p-role-workers` (or any file under
 
 ## Adding a role or a role rule
 
-- Ship the role prompt, its JSON allow-list, the launcher wiring, a row in TEAM.md, a design row, a skill reference
-  with its trigger row, and a test file with at least one real run; one grilled design is one release.
+- Ship the role prompt, its JSON allow-list, the launcher wiring (and what the Hermes backend gets instead: tool
+  rules, a guard), a row in TEAM.md, a line in `docs/design.md`, a skill reference with its trigger row, and a test
+  file with at least one real run; one grilled design is one release.
+- Agnostic by default: a new mechanism must work on both backends, or say in `docs/design.md` why it cannot. Prefer
+  an after-run guard (works everywhere) over a Claude-only permission rule.
+- Don't grow back: when the planner skips a step, fix the instruction or accept the slip. Add code (a refusal, a WARN)
+  only when a slip has cost real work more than once.
 - Each new role rule gets a toy repo where the wrong path is tempting, run for real; if the worker ignores a rule
   written as a principle, rewrite it as a numbered procedure step and rerun.
 - When a `## Result` or review gains a new line (e.g. `Not checked:`), also add the planner step that shows it to the
@@ -27,8 +34,8 @@ The planner loads all of SKILL.md every session, so its size is paid on every pr
 - A rule that applies only to one project shape or event (multi-repo, shared repo, switching, Hermes backend, browser
   UI, a single step's detail) goes into the matching `references/<topic>.md`, never into the main procedure. Extend
   an existing reference before creating one; add a new one only with a row in SKILL.md's trigger table.
-- SKILL.md keeps the core loop (steps 0-11), the cost log, and pitfalls that apply to every project; each step names
-  the reference it needs (e.g. step 2 -> `tickets.md`).
+- SKILL.md keeps the core loop (steps 0-11) and pitfalls that apply to every project; each step names the reference
+  it needs (e.g. step 2 -> `tickets.md`).
 - Moving text into a reference is a move, not a rewrite: keep each rule's wording, so the CHANGELOG can say "moved,
   not changed". Mark the CHANGELOG entry **re-copy** and tell the user to start a new planner session.
 - After a split, confirm a reference loads: `skill_view(name="orchestrate", file_path="references/<file>")`.

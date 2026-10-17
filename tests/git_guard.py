@@ -3,11 +3,12 @@
 
 No model: git-ro.py allows log/diff/show and refuses `--output` (and abbreviations), `--ext-diff`, `--no-index`,
 `--textconv`, a diff path outside the repo, other subcommands; on a repo whose own config runs a program (gpg.program,
-diff.external, core.fsmonitor, a textconv driver) neither git-ro.py nor the launcher's history.txt runs it (0.13.3), and
-a subfolder source gets no history; every role's settings lose their raw `git log/diff/show` grants; the hook/config
-fingerprint catches a new hook, a mode change (POSIX only), a config edit, and nothing on an untouched repo; the
-launcher's `main()` with a scripted worker FAILs a run that writes a hook and passes one that does not; the researcher
-runs without Bash and gets history.txt, written only once the worker lock is held.
+diff.external, core.fsmonitor, a textconv driver) neither git-ro.py nor the researcher's source guard runs it (0.13.3);
+every role's settings lose their raw `git log/diff/show` grants; the hook/config fingerprint catches a new hook, a mode
+change (POSIX only), a config edit, and nothing on an untouched repo; the launcher's `main()` with a scripted worker
+FAILs a run that writes a hook and passes one that does not; the researcher runs without Bash, gets no history.txt,
+and FAILs `guard:source-changed` / `guard:topic-folder-changed` when it edits or commits in the source or writes a
+second file next to its findings (0.14.0).
 
 `--real` adds 4 real `claude -p` calls (Sonnet, about $0.55): the old rule `Bash(git log:*)` lets `git log --output`
 write a file (the 0.13.1 finding), the new settings deny it and the wrapper refuses it, and the wrapper's plain
@@ -128,13 +129,12 @@ def hostile_checks(rw):
     check("git-ro allows --text (a different option)", rc == 0 and "a.txt" in out, out)
     mark.unlink(missing_ok=True)
     topic = ROOT / "topic-hostile"; topic.mkdir()
-    hist = rw.research_history(repo, topic)
-    check("history.txt of a hostile source: written, and nothing of the repo's runs",
-          not mark.exists() and "signed" in hist.read_text(), hist.read_text()[:300])
-    sub = repo / "pkg"; sub.mkdir()
-    hist = rw.research_history(sub, topic)
-    check("history.txt of a subfolder: no history (not the enclosing repo's under the subfolder's name)",
-          "no history" in hist.read_text() and "signed" not in hist.read_text(), hist.read_text()[:300])
+    (topic / "questions.md").write_text("1. x\n")
+    paths = (topic / "questions.md", topic / "findings.md", repo)
+    snap = rw.research_snapshot(paths)
+    g = rw.research_guards(snap, paths)
+    check("research guard on a hostile source: runs no git (nothing of the repo's runs), no change -> no guard",
+          not mark.exists() and g == [], g)
 
 
 def settings_checks(rw):
@@ -225,25 +225,24 @@ def launcher_checks(rw, repo, hooks):
     topic = repo / ".scratch" / "research" / "t1"
     topic.mkdir(parents=True)
     (topic / "questions.md").write_text("# Research: t1\n\n1. What is in a.txt?\n")
-    rc, line = launch("researcher", f"questions: {topic / 'questions.md'} out: {topic / 'findings.md'} source: {src}",
-                      lambda: None)
+    prompt = f"questions: {topic / 'questions.md'} out: {topic / 'findings.md'} source: {src}"
+    rc, line = launch("researcher", prompt, lambda: (topic / "findings.md").write_text("# Findings\n"))
     tools = seen["cmd"][seen["cmd"].index("--tools") + 1]
     s = json.loads(seen["cmd"][seen["cmd"].index("--settings") + 1])
-    hist = topic / "history.txt"
-    check("launcher: researcher runs without the Bash tool and with no Bash grant",
-          "Bash" not in tools.split(",") and not any(r.startswith("Bash") for r in s["permissions"]["allow"]),
-          (tools, s["permissions"]["allow"]))
-    check("launcher: researcher gets history.txt (Read granted, named in the prompt)",
-          hist.is_file() and "init" in hist.read_text() and any("history.txt" in r for r in s["permissions"]["allow"])
-          and str(hist.as_posix()) in seen["cmd"][2], (hist.read_text() if hist.is_file() else "missing"))
-    hist.write_text("KEEP\n")
-    lock = rw.teamcfg.lock_path(repo / ".scratch")
-    lock.write_text(json.dumps({"launcher_pid": os.getpid(), "role": "dev", "stamp": "x"}))   # a live run holds it
-    rc, line = launch("researcher", f"questions: {topic / 'questions.md'} out: {topic / 'findings.md'} source: {src}",
-                      lambda: None)
-    lock.unlink()
-    check("launcher: researcher refused by a held lock leaves history.txt alone",
-          rc == 2 and "already running" in line and hist.read_text() == "KEEP\n", (line, hist.read_text()[:80]))
+    check("launcher: researcher runs without the Bash tool and with no Bash grant; writing findings passes",
+          rc == 0 and "Bash" not in tools.split(",") and not any(r.startswith("Bash") for r in s["permissions"]["allow"]),
+          (line, tools, s["permissions"]["allow"]))
+    check("launcher: no history.txt any more", not (topic / "history.txt").exists())
+    rc, line = launch("researcher", prompt, lambda: (src / "a.txt").write_text("edited\n"))
+    check("launcher: researcher that edits the source -> FAIL guard:source-changed",
+          rc == 1 and "source-changed:a.txt" in line, line)
+    sh(src, "checkout", "-q", "--", "a.txt")
+    rc, line = launch("researcher", prompt, lambda: sh(src, "commit", "-q", "--allow-empty", "-m", "x"))
+    check("launcher: researcher that commits in the source -> FAIL guard:source-changed (a .git file)",
+          rc == 1 and "source-changed:.git/" in line, line)
+    rc, line = launch("researcher", prompt, lambda: (topic / "notes.md").write_text("x\n"))
+    check("launcher: researcher that writes another file in the topic folder -> FAIL guard:topic-folder-changed",
+          rc == 1 and "topic-folder-changed:notes.md" in line, line)
 
 
 def claude_run(cwd, settings, command):

@@ -12,19 +12,15 @@ Usage (cwd = the project repo, or the workspace root / any of its repos):
     python <kit>/scratch.py resume [feature]        # step 0: ff-only pull of scratch + feature branch(es), state report
     python <kit>/scratch.py commit "<message>"      # commit the scratch repo (after every Status change)
     python <kit>/scratch.py decide <feature> "<text>"  # one line in <feature>/decisions.md, committed
-    python <kit>/scratch.py status <feature> <NN> <status> [--verify "PASS|FAIL|SKIP: <text>"] [--step "<text>"]...
+    python <kit>/scratch.py status <feature> <NN> <status> [--verify "PASS|FAIL|SKIP: <text>"]
                                                     # set a ticket's Status (never by hand); records the Verify
-    python <kit>/scratch.py fix <feature> <NN-fix-slug> --for <NN> "<what was seen>"   # a planner-written fix ticket
-    python <kit>/scratch.py rewrite <feature> <NN> "<why>"   # after editing a dispatched ticket
     python <kit>/scratch.py stop                    # force-stop the running worker; logs it in decisions.md
     python <kit>/scratch.py switch                  # push scratch + feature branch(es) for the other machine
     python <kit>/scratch.py sync-main [--apply]     # shared repo, between batches: merge origin/main into the branch
     python <kit>/scratch.py baseline <feature>      # before the first ticket: record what already fails on main
 
-`decide`, `status`, `fix` and `rewrite` also write a `planner` line to runs.log (plannerlog.py), so the planner's own
-actions show in hermes-dev-watch next to the workers'. `status` refuses (STOP, nothing changed): a ticket with a
-`Verify:` line to review/done without `--verify` (unless its last record is PASS); `--verify FAIL` to review without
-an open `fix --for` ticket naming it; FAIL to done; done while a fix ticket naming it is not done.
+`decide` and `status` also write a `planner` line to runs.log (plannerlog.py), so the planner's own actions show in
+hermes-dev-watch next to the workers'.
 
 Last line: `<COMMAND> OK ...` (exit 0) or `<COMMAND> STOP <reason>` (exit 1): a STOP needs the user.
 """
@@ -335,7 +331,7 @@ def cmd_decide(a):
     return 0
 
 
-# ---------------------------------------------------------------- planner commands (plannerlog.py)
+# ---------------------------------------------------------------- status (plannerlog.py)
 
 def one_repo(repos, ticket_text=None):
     r = pl.tk.field(ticket_text or "", "Repo")
@@ -382,107 +378,17 @@ def cmd_status(a):
                   '"SKIP: <why not now>"'); return 1
         word, vtext = m.group(1), pl.fold(m.group(2))
         verdict = f"{word} verify {nn}: {vtext}"
-    elif a.step:
-        print("STATUS STOP --step goes with --verify (the steps of the check)"); return 1
-    if a.status in ("review", "done") and pl.needs_verify(text) and word is None and pl.last_record(text) != "PASS":
-        print(f"STATUS STOP {t.name} has a Verify line ({pl.tk.field(text, 'Verify')[:80]}); record it: "
-              f'--verify "PASS: ..." / "FAIL: ..." / "SKIP: <why it runs later>"'); return 1
-    fixes = pl.fix_tickets_for(fd, t)
-    if word == "FAIL":
-        if a.status == "done":
-            print(f"STATUS STOP a failed Verify cannot be done; write a fix ticket (scratch.py fix --for {nn})"); return 1
-        planner_fixes = [p for p, s in fixes if s != "done" and pl.FOUND_RE.search(p.read_text(encoding="utf-8"))]
-        if a.status == "review" and not planner_fixes:
-            print(f"STATUS STOP a failed Verify goes to review only with an open fix ticket for it: "
-                  f'scratch.py fix {a.feature} <NN-fix-slug> --for {nn} "<what was seen>" first'); return 1
-    if a.status == "done":
-        open_fixes = [f"{p.name} ({s})" for p, s in fixes if s != "done"]
-        if open_fixes:
-            print(f"STATUS STOP {t.name} has open fix tickets: {', '.join(open_fixes)}"); return 1
     new = set_status(text, a.status)
     if new is None:
         print(f"STATUS STOP {t.name} has no Status: line"); return 1
     if word:
-        new = pl.append(new, f"Planner Verify: {word} {vtext}" + "".join(f"\n- {pl.fold(s, 300)}" for s in a.step))
+        new = pl.append(new, f"Planner Verify: {word} {vtext}")
     pl.write(t, new, crlf)
-    change = f"status {nn} {old} -> {a.status}"
-    rid = pl.log(scratch, a.feature, verdict or f"NOTE status {nn} {a.status}", "verify" if word else "status",
-                 ticket=t.name, repo=one_repo(repos, text), steps=a.step, changes=[change])
+    rid = pl.log(scratch, a.feature, verdict or f"NOTE status {nn} {a.status}", "status", ticket=t.name,
+                 repo=one_repo(repos, text))
     sha = commit_scratch(scratch, f"{nn} {a.status}" + (f" (verify {word})" if word else ""))
     print(f"STATUS OK {t.name} {old} -> {a.status}" + (f", verify {word}" if word else "") + f", {rid}"
           + (f" committed {sha}" if sha else ""))
-    return 0
-
-
-def cmd_fix(a):
-    _, scratch, repos = ctx()
-    fd = feature_dir(scratch, a.feature, "FIX")
-    if not fd:
-        return 1
-    name = a.name.removesuffix(".md")
-    if not pl.FIX_NAME_RE.match(name):
-        print(f"FIX STOP name it <NN>-fix-<slug> (lowercase, digits, dashes), not {name}"); return 1
-    orig, why = pl.find_ticket(fd, a.for_)
-    if not orig:
-        print(f"FIX STOP --for: {why}"); return 1
-    dst = fd / "issues" / f"{name}.md"
-    if dst.exists():
-        print(f"FIX STOP {dst.name} already exists"); return 1
-    new_id, orig_id = pl.tk.ticket_id(name), pl.tk.ticket_id(orig.name)
-    taken = [p.name for p in (fd / "issues").glob("*.md") if pl.tk.ticket_id(p.name) == new_id]
-    if new_id != orig_id and taken:
-        print(f"FIX STOP number {pl.num(name)} is taken ({', '.join(taken)}); use {pl.num(orig.name)}-fix-<slug> or a "
-              "new number"); return 1
-    otext, crlf = pl.read(orig)
-
-    def raw(k):                    # the header value as written (backticks kept), without a trailing `  # comment`
-        m = re.search(rf"^{re.escape(k)}:[ \t]*(.*?)[ \t]*$", otext, re.M)
-        return m.group(1).split("  #")[0].strip() if m else None
-    f = {k: raw(k) for k in ("Lane", "Repo", "Branch", "Round", "Terms", "Seam", "Test command", "Verify")}
-    try:
-        rnd = int(f["Round"] or 0) + 1
-    except ValueError:
-        rnd = 1
-    what = pl.fold(a.what, 400)
-    head = [f"# {name}: <title: the behaviour to fix>", "", f"Lane: {f['Lane'] or 'full'}"]
-    head += [f"Repo: {f['Repo']}"] if f["Repo"] is not None else []
-    head += [f"Branch: {f['Branch']}", "Status: todo", f"Round: {rnd}", f"Blocked by: {pl.num(orig.name)}",
-             f"Terms: {f['Terms'] or '<domain words>'}", f"Seam: {f['Seam'] or '<the public interface>'}",
-             f"Test command: {f['Test command'] or '<runs only this ticket test>'}",
-             f"Verify: {f['Verify'] or 'None'}", "",
-             f"Found by the planner: {what} (checking {orig.name})", "",
-             "## What to build", "", "<what to change, in domain terms; no code>", "",
-             "## Acceptance criteria", "", "- [ ] <criterion>", "", "## Result", ""]
-    pl.write(dst, "\n".join(head), crlf)
-    batch = pl.add_to_batch(fd, pl.num(orig.name), pl.num(name))
-    add_decision(scratch, a.feature, f"planner fix ticket {dst.name} for {orig.name}: {what}", commit=False)
-    rid = pl.log(scratch, a.feature, f"NOTE fix {pl.num(name)} for {pl.num(orig.name)}: {what}", "fix",
-                 ticket=dst.name, repo=one_repo(repos, otext), changes=[f"created {dst.name}, Blocked by {orig.name}"])
-    sha = commit_scratch(scratch, f"{pl.num(name)} fix ticket for {pl.num(orig.name)} (planner)")
-    warn = "; WARN Round 3 is never dispatched: ask the user" if rnd >= 3 else ""
-    print(f"FIX OK {dst.relative_to(scratch).as_posix()} (Round {rnd}"
-          + (f", added to batch {batch}" if batch else ", in no batch: add it to batches.md") + f"), {rid}"
-          + (f" committed {sha}" if sha else "") + warn
-          + ". Fill the title, What to build and the criteria, then `tickets.py`; new scope needs the user's yes")
-    return 0
-
-
-def cmd_rewrite(a):
-    _, scratch, repos = ctx()
-    fd = feature_dir(scratch, a.feature, "REWRITE")
-    if not fd:
-        return 1
-    t, why = pl.find_ticket(fd, a.ticket)
-    if not t:
-        print(f"REWRITE STOP {why}"); return 1
-    text, crlf = pl.read(t)
-    w = pl.fold(a.why, 400)
-    pl.write(t, pl.append(text, f"Rewritten by the planner: {w}"), crlf)
-    add_decision(scratch, a.feature, f"planner rewrote {t.name}: {w}", commit=False)
-    rid = pl.log(scratch, a.feature, f"NOTE rewrite {pl.num(t.name)}: {w}", "rewrite", ticket=t.name,
-                 repo=one_repo(repos, text), changes=[f"rewrote {t.name}"])
-    sha = commit_scratch(scratch, f"{pl.num(t.name)} rewritten (planner)")
-    print(f"REWRITE OK {t.name}, {rid}" + (f" committed {sha}" if sha else ""))
     return 0
 
 
@@ -609,8 +515,6 @@ def cmd_resume(a):
             else:
                 action = "REDISPATCH (no commit, tree clean)"
             report.append(f"  {t['name']} in-progress | last run: {last} | {action}")
-        for w in pl.warnings(fd):
-            report.append(f"  WARN {w}")
         dec = fd / "decisions.md"
         if dec.is_file():
             lines = [l for l in dec.read_text(encoding="utf-8").splitlines() if l.startswith("- ")]
@@ -689,10 +593,7 @@ def main():
     p = sub.add_parser("commit"); p.add_argument("message")
     p = sub.add_parser("decide"); p.add_argument("feature"); p.add_argument("text")
     p = sub.add_parser("status"); p.add_argument("feature"); p.add_argument("ticket"); p.add_argument("status")
-    p.add_argument("--verify"); p.add_argument("--step", action="append", default=[])
-    p = sub.add_parser("fix"); p.add_argument("feature"); p.add_argument("name")
-    p.add_argument("--for", dest="for_", required=True); p.add_argument("what")
-    p = sub.add_parser("rewrite"); p.add_argument("feature"); p.add_argument("ticket"); p.add_argument("why")
+    p.add_argument("--verify")
     p = sub.add_parser("stop"); p.add_argument("--wait", type=int, default=60)
     sub.add_parser("switch")
     p = sub.add_parser("sync-main"); p.add_argument("--apply", action="store_true")
@@ -700,8 +601,7 @@ def main():
     p.add_argument("--lines", type=int, default=60); p.add_argument("--timeout", type=int, default=900)
     a = ap.parse_args()
     return {"init": cmd_init, "resume": cmd_resume, "commit": cmd_commit, "decide": cmd_decide, "stop": cmd_stop,
-            "switch": cmd_switch, "sync-main": cmd_sync_main, "baseline": cmd_baseline, "status": cmd_status,
-            "fix": cmd_fix, "rewrite": cmd_rewrite}[a.cmd](a)
+            "switch": cmd_switch, "sync-main": cmd_sync_main, "baseline": cmd_baseline, "status": cmd_status}[a.cmd](a)
 
 
 if __name__ == "__main__":
