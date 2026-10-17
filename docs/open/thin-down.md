@@ -1,6 +1,7 @@
 # Design: thin down the kit (0.14.0)
 
-Status: built 2026-10-17 as kit 0.14.0 on branch thin-down; not merged.
+Status: built 2026-10-17 as kit 0.14.0, merged to main the same day (Windows check: suite, both backend smoke tests
+5/5, `researcher.py` 18/18). Follow-up 0.14.1: the researcher's source guard skips build folders (see CHANGELOG).
 
 ## The problem
 

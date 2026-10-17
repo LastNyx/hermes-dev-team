@@ -1,6 +1,6 @@
 # Design
 
-Why the kit (0.14.0) works the way it does. Every mechanism below was run, not assumed; numbers are single samples on
+Why the kit (0.14.1) works the way it does. Every mechanism below was run, not assumed; numbers are single samples on
 toy repos (Claude Code 2.1.296 unless noted). Backend details: [backend-claude.md](backend-claude.md),
 [backend-hermes.md](backend-hermes.md).
 
@@ -122,6 +122,7 @@ the watcher's parser in the kit was rejected (goes stale).
 - **Planner refusals, WARNs, `fix`/`rewrite`/`--step`:** policing, not logging (thin-down 2026-10-17).
 - **Researcher Claude-only:** now guard-enforced on Hermes.
 - **`history.txt` for research sources:** made the launcher run git on hostile sources.
+- **Copying a local source before research** (2026-10-17): one worker at a time, and research happens while the user is grilling, not editing; build output is skipped. Left: an editor's background git touching `.git/` FAILs `guard:source-changed:.git/...`, a visible one-minute re-run. Revisit if it costs real work twice.
 - **`kit/costs.py`:** list price is not subscription billing; the watcher shows `list$`.
 - **`claude-p-role-workers` as a skill:** vendor-specific; now `docs/backend-claude.md`.
 - **Sandbox/container mode:** considered, skipped.

@@ -15,6 +15,10 @@ hermes-dev-watch reads (`docs/watch-contract.md`).
 - `skills/orchestrate` 0.9.1: `references/config.md` lists `research_skip`.
 - Tests: `tests/git_guard.py` 39 (38 on Windows): a write in the source's `node_modules` passes. `docs/design.md`,
   `docs/backend-hermes.md`, `docs/testing.md` updated.
+- `docs/design.md` Rejected: copying a local source before research (a live-source edit mid-run is rare; a `.git`
+  touch is a visible re-run). `docs/open/thin-down.md`: status merged.
+- **action** on every machine after pull: `python kit/link-skills.py --apply` if not done for 0.14.0;
+  hermes-dev-watch 0.3.5 (its contract test expects no planner progress log).
 
 ## 0.14.0 - 2026-10-17
 
