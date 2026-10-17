@@ -6,6 +6,16 @@ mark an entry **action** when another machine must do something (re-run `link-sk
 Format: version, date, then one line per change, naming the file. **watch:** marks a change to the run files that
 hermes-dev-watch reads (`docs/watch-contract.md`).
 
+## 0.14.1 - 2026-10-17
+
+- `kit/run-worker.py`: the researcher's source guard skips build and dependency folders (`RESEARCH_SKIP`:
+  `node_modules`, `.venv`, `venv`, `dist`, `build`, `.next`, `.turbo`, `__pycache__`, `.gradle`, `target`, `.cache`;
+  `.git` is never skipped). New `.team.json` key `research_skip` adds globs. Measured on atlas: 124,214 files and 20.4 s
+  per snapshot -> 1,441 files and 0.09 s (two snapshots per run). Gap: a write inside a skipped folder is not caught.
+- `skills/orchestrate` 0.9.1: `references/config.md` lists `research_skip`.
+- Tests: `tests/git_guard.py` 39 (38 on Windows): a write in the source's `node_modules` passes. `docs/design.md`,
+  `docs/backend-hermes.md`, `docs/testing.md` updated.
+
 ## 0.14.0 - 2026-10-17
 
 Thin down the kit (design: `docs/open/thin-down.md`, grilled). `docs/design.md` rewritten as the current state.

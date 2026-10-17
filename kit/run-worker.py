@@ -194,11 +194,19 @@ def research_prompt(prompt, web):
     return prompt + ("\nweb: on" if web and "web:" not in prompt else "")
 
 
-def tree_print(folder):
-    """{relative path: (size, mtime_ns, mode)} of every file under folder, .git included. Runs no git: the source is
-    untrusted, and a repo's own git config can make a plain `git status` run a program (0.13.3)."""
+# Build output and dependency folders the researcher guard does not fingerprint (a folder name at any depth; .team.json
+# "research_skip" adds globs). measured: atlas, 124,214 files and 20 s per snapshot -> 1,441 files and 0.1 s.
+RESEARCH_SKIP = ["node_modules", ".venv", "venv", "dist", "build", ".next", ".turbo", "__pycache__", ".gradle",
+                 "target", ".cache"]
+
+
+def tree_print(folder, skip=()):
+    """{relative path: (size, mtime_ns, mode)} of every file under folder, .git included; folders whose name matches a
+    `skip` glob are left out. Runs no git: the source is untrusted, and a repo's own git config can make a plain
+    `git status` run a program (0.13.3)."""
     out = {}
-    for dirpath, _, files in os.walk(folder):
+    for dirpath, dirs, files in os.walk(folder):
+        dirs[:] = [d for d in dirs if d == ".git" or not any(fnmatch.fnmatch(d, s) for s in skip)]
         for f in files:
             p = pathlib.Path(dirpath) / f
             try:
@@ -209,18 +217,19 @@ def tree_print(folder):
     return out
 
 
-def research_snapshot(paths):
+def research_snapshot(paths, skip=()):
     q, out, src = paths
-    return {"source": tree_print(src), "topic": {k: v for k, v in tree_print(q.parent).items() if k != out.name}}
+    return {"source": tree_print(src, skip), "topic": {k: v for k, v in tree_print(q.parent).items() if k != out.name}}
 
 
-def research_guards(before, paths):
-    """After a researcher run (both backends): the source folder unchanged (every file, .git included), and nothing
-    in the topic folder new or changed except the findings file. Known gap: a write elsewhere is not seen."""
+def research_guards(before, paths, skip=()):
+    """After a researcher run (both backends): the source folder unchanged (every file, .git included, skipped folders
+    excepted), and nothing in the topic folder new or changed except the findings file. Known gaps: a write elsewhere,
+    or inside a skipped folder, is not seen."""
     if before is None:
         return []
     q, out, src = paths
-    now = research_snapshot(paths)
+    now = research_snapshot(paths, skip)
     g = []
     if now["source"] != before["source"]:
         changed = sorted(k for k in set(now["source"]) | set(before["source"])
@@ -567,7 +576,8 @@ def main():
             "ticket": st["ticket"], "feature": feature, "repo": repo.name, "stamp": stamp, "fmt": teamcfg.RUN_FORMAT}
     write_lock(lock)
     try:
-        rsnap = research_snapshot(rpaths) if rpaths else None
+        rskip = RESEARCH_SKIP + list(cfg.get("research_skip") or [])
+        rsnap = research_snapshot(rpaths, rskip) if rpaths else None
         cmd, st["model"] = be.command(job)
         print(f"START {a.role} {be.name}:{st['model']}{'/' + effort if effort else ''} max-turns={turns}{cut}"
               f"{' enforce=' + be.enforce if be.enforce else ''} | progress: {rel(progress_path)}", flush=True)
@@ -576,7 +586,7 @@ def main():
         secs = round(time.time() - t0)
         out_path.write_text(json.dumps(d), encoding="utf-8")
         r = be.result(d, job)
-        guards = guards_after(snap, protected) + (research_guards(rsnap, rpaths) if rpaths else [])
+        guards = guards_after(snap, protected) + (research_guards(rsnap, rpaths, rskip) if rpaths else [])
         verdict = verdict_of(r["text"], r["subtype"], guards)
         if r["extra"] and verdict.startswith("PASS"):
             verdict = f"FAIL {r['extra']} | {verdict}"

@@ -13,6 +13,7 @@ Write only `test` plus what the user named; every other key has a working defaul
 | `models` | per role, Claude runs only, e.g. `{"dev": "sonnet"}` |
 | `effort` | `"medium"`, or per role |
 | `protected` | more file-name globs the dev may not edit, on top of the launcher's package/lock/test-config list |
+| `research_skip` | more folder-name globs the researcher's source guard does not fingerprint, on top of `node_modules`, `.venv`, `venv`, `dist`, `build`, `.next`, `.turbo`, `__pycache__`, `.gradle`, `target`, `.cache` (`.git` is always checked) |
 | `backend` | `auto` (default), `claude`, `hermes`, or a per-role map |
 | `hermes_models`, `hermes_provider`, `hermes_profile` | Hermes runs only; full provider model id per role; profile default `hdt-worker` |
 | `rules`, `rules_max_chars` | file or list pasted into every worker prompt instead of AGENTS.md/CLAUDE.md; cap default 40000 |

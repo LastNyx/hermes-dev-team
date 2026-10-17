@@ -36,7 +36,7 @@ Nothing blocks a call while it runs: `-t file,terminal` restricts nothing inside
   all 4 forbidden chores; without it, it did all 4.
 - **After-run guards (same as Claude):** main moved, branch changed, history rewritten, protected test-config file
   changed, git hooks or config changed, a push from this clone. For the researcher also: any file in the source folder
-  changed (`.git` included; fingerprinted without running git), or anything but the findings file written in its
+  changed (`.git` included, build folders like `node_modules` skipped; fingerprinted without running git), or anything but the findings file written in its
   topic folder.
 
 Not caught: a write outside the repo, scratch and source folders; a branch switch that switches back. Review before

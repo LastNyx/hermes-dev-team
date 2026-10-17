@@ -8,7 +8,7 @@ every role's settings lose their raw `git log/diff/show` grants; the hook/config
 change (POSIX only), a config edit, and nothing on an untouched repo; the launcher's `main()` with a scripted worker
 FAILs a run that writes a hook and passes one that does not; the researcher runs without Bash, gets no history.txt,
 and FAILs `guard:source-changed` / `guard:topic-folder-changed` when it edits or commits in the source or writes a
-second file next to its findings (0.14.0).
+second file next to its findings (0.14.0), but not for a write inside a skipped build folder (0.14.1).
 
 `--real` adds 4 real `claude -p` calls (Sonnet, about $0.55): the old rule `Bash(git log:*)` lets `git log --output`
 write a file (the 0.13.1 finding), the new settings deny it and the wrapper refuses it, and the wrapper's plain
@@ -240,6 +240,12 @@ def launcher_checks(rw, repo, hooks):
     rc, line = launch("researcher", prompt, lambda: sh(src, "commit", "-q", "--allow-empty", "-m", "x"))
     check("launcher: researcher that commits in the source -> FAIL guard:source-changed (a .git file)",
           rc == 1 and "source-changed:.git/" in line, line)
+    def build_output():                                 # a dev server or install touching node_modules mid-run
+        (src / "web" / "node_modules" / "pkg").mkdir(parents=True, exist_ok=True)
+        (src / "web" / "node_modules" / "pkg" / "index.js").write_text("x\n")
+    rc, line = launch("researcher", prompt, build_output)
+    check("launcher: a write inside the source's node_modules (a skipped folder) passes; .git is never skipped",
+          rc == 0 and "PASS" in line and "build" in rw.RESEARCH_SKIP and ".git" not in rw.RESEARCH_SKIP, line)
     rc, line = launch("researcher", prompt, lambda: (topic / "notes.md").write_text("x\n"))
     check("launcher: researcher that writes another file in the topic folder -> FAIL guard:topic-folder-changed",
           rc == 1 and "topic-folder-changed:notes.md" in line, line)
