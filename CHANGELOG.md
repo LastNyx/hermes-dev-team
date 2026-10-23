@@ -6,6 +6,12 @@ mark an entry **action** when another machine must do something (re-run `link-sk
 Format: version, date, then one line per change, naming the file. **watch:** marks a change to the run files that
 hermes-dev-watch reads (`docs/watch-contract.md`).
 
+## 0.14.2 - 2026-10-23
+
+- `skills/orchestrate/references/tickets.md`: new "Screens are acceptance criteria" rule (one `UI:` criterion per
+  screen or control; an API without its screen fails the ticket). Measured: devs given API-only criteria shipped the
+  API and skipped the screen twice in one feature. orchestrate 0.9.2.
+
 ## 0.14.1 - 2026-10-17
 
 - `kit/run-worker.py`: the researcher's source guard skips build and dependency folders (`RESEARCH_SKIP`:

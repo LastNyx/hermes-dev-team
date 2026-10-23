@@ -11,6 +11,12 @@ Load at step 2, and before writing or dispatching a fix ticket.
   Test command, Verify); exit 0 means dispatchable. The launcher reads only the plain `Test command:` line.
 - A worker has no web and cannot ask: put every fact it needs in the ticket.
 
+## Screens are acceptance criteria
+
+A ticket whose behaviour has a screen gets one `UI:` criterion per screen or control (page, form, button, nav link),
+plus the line "An API without its screen fails this ticket." The dev builds only what the criteria name: with API-only
+criteria it ships the API and skips the screen. Name the browser check in `Verify:`.
+
 ## Test command vs Verify
 
 `Test command` is what the dev may run: cheap and safe, no running services, no database writes (typecheck, lint,
