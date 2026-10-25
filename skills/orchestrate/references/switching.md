@@ -20,4 +20,10 @@ Load when the user says "switching", asks to stop a running worker, or step 0 re
   second dispatch (`ERROR worker already running`), also from another planner session. Step 0 removes a lock whose
   launcher and worker are both gone. `RESUME STOP orphaned worker` (launcher gone, worker alive; no exit notice will
   come): ask the user, then `scratch.py stop`.
+- A killed worker leaves `<scratch>/runs/worker.lock`: `scratch.py stop`, never a blind `pkill`.
+- **Dirty-tree causes** (step 0 says ASK, switching stops):
+  - An untracked `__pycache__/` (or any build output). Ask the user to add it to `.gitignore`.
+  - A tracked `.scratch/` (inside the product repo, not its own git repo) makes every `status`/`decide` dirty the
+    tree, and the dev refuses a dirty tree: commit `.scratch` before each dispatch, or move it out with
+    `scratch.py init`.
 - **`DIVERGED`:** both machines committed. Show both sides; never merge, reset or rebase to get past it.

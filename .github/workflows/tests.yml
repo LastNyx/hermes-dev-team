@@ -70,3 +70,5 @@ jobs:
         run: python tests/permission_paths.py
       - name: suite_runner
         run: python tests/suite_runner.py
+      - name: check_run
+        run: python tests/check_run.py

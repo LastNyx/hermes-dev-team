@@ -18,6 +18,7 @@ Usage (cwd = the project repo, or the workspace root / any of its repos):
     python <kit>/scratch.py switch                  # push scratch + feature branch(es) for the other machine
     python <kit>/scratch.py sync-main [--apply]     # shared repo, between batches: merge origin/main into the branch
     python <kit>/scratch.py baseline <feature>      # before the first ticket: record what already fails on main
+    python <kit>/scratch.py check-run begin|end     # trivial lane: the launcher's guards around the planner's own fix
 
 `decide` and `status` also write a `planner` line to runs.log (plannerlog.py), so the planner's own actions show in
 hermes-dev-watch next to the workers'.
@@ -340,6 +341,74 @@ def cmd_decide(a):
     return 0
 
 
+# ---------------------------------------------------------------- check-run (trivial lane)
+
+def launcher():
+    """kit/run-worker.py as a module (its file name has a hyphen): the guards live there, shared with every worker."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("run_worker", pathlib.Path(__file__).resolve().parent / "run-worker.py")
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    return m
+
+
+def cmd_check_run(a):
+    """The launcher's after-run guards around the planner's own trivial fix (no worker, no allow-list).
+
+    `begin` snapshots main, branch, HEAD, remote refs, hooks/config and protected files into runs/check-run.json; `end`
+    runs the same `guards_after` a worker gets, plus a clean tree, and lists the commits made in between. A check after
+    the fact cannot stop a push; it makes one visible.
+    """
+    tc, scratch, repos = ctx()
+    top = git(pathlib.Path.cwd(), "rev-parse", "--show-toplevel")
+    if not top:
+        print("CHECK-RUN STOP run it from the repo"); return 1
+    repo = pathlib.Path(top).resolve()
+    if pathlib.Path.cwd().resolve() != repo:
+        os.chdir(repo)                                         # guards_after reads the cwd's git
+    rw = launcher()
+    protected = rw.PROTECTED + list(tc["cfg"].get("protected") or [])
+    snap_file = scratch / "runs" / f"check-run-{repo.name}.json"
+    if a.phase == "begin":
+        held, alive = teamcfg.read_lock(scratch)
+        if alive:
+            print(f"CHECK-RUN STOP a worker is running ({held.get('role')} {held.get('ticket') or '-'}); wait for it")
+            return 1
+        branch = git(repo, "branch", "--show-current")
+        if branch in MAIN:
+            print(f"CHECK-RUN STOP on {branch}; fix on the feature branch"); return 1
+        if dirty(repo):
+            print("CHECK-RUN STOP the tree is dirty; commit or ask the user first"); return 1
+        snap = rw.snapshot(protected)
+        snap_file.parent.mkdir(parents=True, exist_ok=True)
+        snap_file.write_text(json.dumps({k: sorted(v) if isinstance(v, set) else v for k, v in snap.items()}),
+                             encoding="utf-8")
+        print(f"CHECK-RUN OK begin on {branch} at {snap['head'][:8]}; make the fix, run the full suites, commit, then "
+              "`check-run end`")
+        return 0
+    if not snap_file.is_file():
+        print("CHECK-RUN STOP no `check-run begin` for this repo"); return 1
+    snap = json.loads(snap_file.read_text(encoding="utf-8"))
+    for k in ("tracking", "locals"):
+        snap[k] = set(snap.get(k) or [])
+    # JSON turned the (mode, sha) tuples into lists; git_state() compares tuples
+    snap["git_state"] = {k: tuple(v) if isinstance(v, list) else v for k, v in (snap.get("git_state") or {}).items()}
+    guards = rw.guards_after(snap, protected)
+    if dirty(repo):
+        guards.append("tree-dirty")
+    commits = (git(repo, "log", "--format=%h %s", f"{snap['head']}..HEAD") or "").splitlines()
+    ticket_like = [c for c in commits if re.search(r"\(\S+\.md\)$", c)]
+    if ticket_like:
+        guards.append("subject-ends-like-a-ticket:" + ticket_like[0].split()[0])   # resume would read it as a dev's
+    for c in commits:
+        print("  " + c)
+    snap_file.unlink()
+    if guards:
+        print(f"CHECK-RUN FAIL {','.join(guards)} | {len(commits)} commit(s)"); return 1
+    print(f"CHECK-RUN OK {len(commits)} commit(s), main unmoved, nothing pushed, no protected file changed, tree clean")
+    return 0
+
+
 # ---------------------------------------------------------------- status (plannerlog.py)
 
 def one_repo(repos, ticket_text=None):
@@ -608,9 +677,11 @@ def main():
     p = sub.add_parser("sync-main"); p.add_argument("--apply", action="store_true")
     p = sub.add_parser("baseline"); p.add_argument("feature"); p.add_argument("--force", action="store_true")
     p.add_argument("--lines", type=int, default=60); p.add_argument("--timeout", type=int, default=900)
+    p = sub.add_parser("check-run"); p.add_argument("phase", choices=["begin", "end"])
     a = ap.parse_args()
     return {"init": cmd_init, "resume": cmd_resume, "commit": cmd_commit, "decide": cmd_decide, "stop": cmd_stop,
-            "switch": cmd_switch, "sync-main": cmd_sync_main, "baseline": cmd_baseline, "status": cmd_status}[a.cmd](a)
+            "switch": cmd_switch, "sync-main": cmd_sync_main, "baseline": cmd_baseline, "status": cmd_status,
+            "check-run": cmd_check_run}[a.cmd](a)
 
 
 if __name__ == "__main__":

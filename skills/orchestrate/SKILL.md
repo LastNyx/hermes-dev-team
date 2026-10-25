@@ -1,7 +1,7 @@
 ---
 name: orchestrate
 description: Run dev, reviewer, docs, researcher workers; verify results.
-version: 0.10.0
+version: 0.11.0
 author: hermes-dev-team contributors
 license: MIT
 platforms: [linux, macos, windows]
@@ -20,8 +20,8 @@ read result lines and files, never a worker's transcript.
 ## When to Use
 
 Tickets exist and the user said build or go. FULL lane = tickets -> dev per ticket -> reviewer -> docs.
-QUICK lane = one ticket -> dev -> your verification. Planning comes first, with Matt Pocock's `grill-with-docs` and
-`to-tickets` (installed separately); this skill only adds the fields a worker needs. Also: dispatch the researcher
+QUICK lane = one ticket -> dev -> your verification. TRIVIAL = your own fix inside `scratch.py check-run`. Route every
+request, finding or gap by size (`lanes.md`). Planning comes first (Matt Pocock's `grill-with-docs`, `to-tickets`). Also: dispatch the researcher
 (`research.md`) instead of searching yourself when an answer needs reading more than a few files, or a whole repo or
 folder.
 
@@ -37,9 +37,10 @@ Load a reference with `skill_view(name="orchestrate", file_path="references/<fil
 | Reference | Load when |
 |---|---|
 | `tickets.md` | step 2, and before writing or dispatching a fix ticket |
+| `lanes.md` | routing a request, finding or gap (trivial / small / large), or the user hands you decisions while away |
 | `workspace.md` | the config has `"repos"` (multi-repo workspace) |
 | `shared-repo.md` | the config has `"shared": true` |
-| `switching.md` | "switching", a force-stop request, or step 0 reports a lock, an orphaned worker or `DIVERGED` |
+| `switching.md` | "switching", a force-stop request, a killed worker, or step 0 reports a lock, an orphaned worker, `DIVERGED` or `ASK` for a dirty tree |
 | `config.md` | other `.team.json` keys, worker rules files, a RESULT with `backend=hermes`, or an `ERROR` about the backend |
 | `browser-projects.md` | the project has a browser UI |
 | `changing-skills.md` | before patching this skill, a role file or the launcher |
@@ -79,21 +80,20 @@ Load a reference with `skill_view(name="orchestrate", file_path="references/<fil
    discard. You may commit only on their explicit yes for that diff, with a subject NOT ending `(<ticket file>)`.
    Then step 6 and `scratch.py decide`. With `enforce=prompt-only` in the RESULT, also load `config.md`.
 6. **Verify**: `git log --stat -1`, the ticket's `Test command`, `git status --short`; for a bug ticket show the user
-   the Result's `Cause:` line. Then the ticket's `Verify:`
-   line if you can run it alone now (`tickets.md`). Record the move with what you saw:
+   the Result's `Cause:` line. Then the ticket's `Verify:` line if you can run it alone now (`tickets.md`). Record the move with what you saw:
    `scratch.py status <feature> <NN> review --verify "PASS|FAIL|SKIP: <what you saw>"` (quick lane: `done`; SKIP for a
    check that waits). A gap you find becomes a fix ticket (`tickets.md`) plus a `decide` line. FAIL in the test
    command: set `blocked`, tell the user the reason line.
 7. Repeat 3-6 until the batch's tickets are all `review` (quick lane: all `done`, then step 10).
 8. **Review the batch** (full lane):
    `python -u KIT/run-worker.py reviewer "feature: .scratch/<feature> batch: <b> tickets: NN,NN base: <sha> round: <n>"`.
-   `base` = the commit before the batch: `git merge-base HEAD main` for batch 1, else the HEAD recorded when the
-   previous batch passed (or the merge commit `sync-main` printed); write it into `batches.md`. Show the user the
-   review's `Not checked:` line.
+   `base` = the commit before the batch's first commit: `git merge-base HEAD main` for batch 1, else the HEAD recorded
+   when the previous batch passed (or the merge commit `sync-main` printed); never HEAD at review time when tickets of
+   this batch were built earlier (empty diff). Write it into `batches.md`. Show the user the review's `Not checked:`.
    PASS: run each `Verify` that had to wait (server, database, the user's yes), set the tickets `done` with
    `scratch.py status --verify`, record HEAD as the next base, back to step 3.
    FAIL: it wrote `review-<b>-<n>.md` and fix tickets; dispatch them (step 4), add them to `tickets:`, review again with
-   round n+1 and the same base. Never dispatch round 3: ask the user.
+   round n+1 and the same base. Never dispatch round 3: ask the user (unless a `delegated:` decision exists: `lanes.md`).
 9. **Docs** (full lane, all `done`): `python KIT/run-worker.py docs "feature: .scratch/<feature>"`. Tell the user the
    `drift.md` items. More than three files to edit: split the job or give it a `<feature>/docs-facts.md`.
 10. **Merge.** Tell the user the branch is ready; the user runs `git merge --no-ff`. Never merge or delete a branch;
@@ -104,14 +104,10 @@ Load a reference with `skill_view(name="orchestrate", file_path="references/<fil
 ## Pitfalls
 
 - Never run two workers at once; the launcher's lock enforces it.
-- An untracked `__pycache__/` (or any build output) is a dirty tree: step 0 says ASK, switching stops. Ask the user to
-  add it to `.gitignore`.
 - The dev's commit subject ends `(<ticket file name>)`; step 0 finds finished tickets by it. Your own commits must not.
 - `FAIL guard:`: `pushed` -> tell the user (they fix the remote); `test-config-changed` or a denial on package/test
   config -> make that change yourself on the user's yes (`tickets.md`), re-dispatch; `history-rewritten` -> restore
   the old tip from `git reflog`.
-- Workers may run the test command, which executes code the dev wrote. That hole remains; review before merge.
-- New machine, or after a kit change: `python <team repo>/tests/backend_smoke.py` (calls a model) proves each backend.
 
 ## Verification
 

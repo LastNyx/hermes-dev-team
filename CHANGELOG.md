@@ -6,6 +6,24 @@ mark an entry **action** when another machine must do something (re-run `link-sk
 Format: version, date, then one line per change, naming the file. **watch:** marks a change to the run files that
 hermes-dev-watch reads (`docs/watch-contract.md`).
 
+## 0.16.0 - 2026-10-25
+
+- `kit/scratch.py check-run begin|end` (new): the launcher's own `snapshot`/`guards_after` around the planner's trivial
+  fix, plus a clean tree and a refusal of a subject ending `(<ticket>.md)`. Refuses main, a dirty tree and a running
+  worker. After the fact only: it makes a push visible, it cannot stop it.
+- `skills/orchestrate` 0.11.0: new `references/lanes.md` (trivial / small / large lanes; trivial = planner fix inside
+  `check-run`; small = quick lane reviewed with the next batch; `delegated:` decision lifts the round-3 stop while
+  the user is away). SKILL.md: lanes in When to Use, batch `base` = commit before the batch's first commit, pitfalls for
+  a killed worker's lock, a tracked `.scratch`, fix-ticket ids and `fix2` naming. `references/tickets.md`: Constraints
+  section, bug tickets reproduce first and need `Cause:`, copy rules from code the worker cannot read, name helpers
+  and test components up front, check UI tickets in the real app before review. Moved from one project's guide
+  (general rules only, no project names).
+- `skills/orchestrate/SKILL.md` thinned (moved, not changed): killed-worker lock and dirty-tree causes (`__pycache__`,
+  tracked `.scratch`) -> `references/switching.md` (trigger widened); fix-ticket ids -> `references/tickets.md`;
+  backend smoke and the test-command hole -> `references/changing-skills.md`. 1,489 -> 1,335 words. **re-copy**.
+- Tests: `tests/check_run.py` (9).
+- **action**: start a new planner session (skill text changed).
+
 ## 0.15.0 - 2026-10-25
 
 - `kit/run-worker.py`: every `./` and `**/` permission rule is written absolute (`anchor_rules`), and `kit/backends.py`

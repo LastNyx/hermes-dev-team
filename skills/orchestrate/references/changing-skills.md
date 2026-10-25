@@ -3,6 +3,8 @@
 Load before patching `orchestrate` (or any file under it), a role file, or the launcher. Backend details live in the
 team repo, not in a skill: `docs/backend-claude.md` (allow-list rules, each measured) and `docs/backend-hermes.md`
 (prompt-only limits, which guards apply). After a launcher or backend change, run `tests/backend_smoke.py`.
+New machine, or after a kit change: `python <team repo>/tests/backend_smoke.py` (calls a model) proves each backend.
+Workers may run the test command, which executes code the dev wrote. That hole remains; review before merge.
 
 - The team skills are linked into the team repo, so any `skill_manage` edit is an uncommitted change there. Before
   patching one, show the user the proposed change in one or two lines and wait for a yes. Keep it general: no project

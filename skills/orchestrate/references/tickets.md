@@ -9,7 +9,15 @@ Load at step 2, and before writing or dispatching a fix ticket.
   tickets by hand to get past it.
 - `python KIT/tickets.py <feature>` checks every ticket and prints the approval table (repo, status, blockers, Seam,
   Test command, Verify); exit 0 means dispatchable. The launcher reads only the plain `Test command:` line.
-- A worker has no web and cannot ask: put every fact it needs in the ticket.
+- A worker has no web and cannot ask: put every fact it needs in the ticket. When the behaviour is copied from code the
+  worker may not read (another repo, an upstream app), copy its rules (order, limits, edge cases) into the ticket text.
+- Add a `## Constraints` section naming what workers must never touch in this project (a live process, a daily
+  checkout, a production database).
+- **Bug tickets:** say "reproduce with a failing test or a log line first, then fix"; the Result must carry `Cause:`.
+  When only the real app shows the bug, quote the event order or numbers you observed and tell the dev not to invent
+  payloads (its `Cause:` will then read `UNCONFIRMED`; you confirm it in step 6).
+- **Pre-empt recurring findings:** name in the ticket the existing helpers the code must reuse, and the component each
+  UI criterion is tested on.
 
 ## Screens are acceptance criteria
 
@@ -46,12 +54,15 @@ one repo per batch). Record them in `<feature>/batches.md`, one line per batch: 
 
 ## Fix tickets
 
+Ticket ids: a plain number never matches its fix tickets; pass the file name or stem (`05-fix`, `05-fix2-x`) to
+`scratch.py status`. A second fix for the same ticket is `<NN>-fix2-<slug>.md`.
+
 The reviewer writes `NN-fix-*.md` (Status `todo`). Check each one's `Seam` before dispatch: a dev with `Seam: None`
 FAILs in seconds without writing code. For a refactor-only fix, name the function or file touched and add "refactor
 only, existing tests are the check".
 
-**Fix tickets you write yourself.** A gap your own Verify finds becomes a fix ticket before the review, not a note
-for the reviewer:
+**Fix tickets you write yourself.** Check a finished UI ticket in the real app before the batch review. A gap your own
+Verify finds becomes a fix ticket (or a trivial-lane fix, `lanes.md`) before the review, not a note for the reviewer:
 
 - A gap is a failed acceptance criterion or Verify, a crash, or a broken existing behaviour. A design opinion ("this
   would be cleaner") goes to the reviewer instead.
