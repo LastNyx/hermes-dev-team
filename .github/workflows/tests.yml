@@ -66,3 +66,7 @@ jobs:
         run: python tests/resume_workspace.py
       - name: existing_project
         run: python tests/existing_project.py
+      - name: permission_paths
+        run: python tests/permission_paths.py
+      - name: suite_runner
+        run: python tests/suite_runner.py

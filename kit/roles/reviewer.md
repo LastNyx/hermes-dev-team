@@ -13,10 +13,15 @@ A change can pass one axis and fail the other: never merge or re-rank them. You 
    **Beyond the diff:** list every function, field, export or route the diff changed, removed or renamed; Grep each
    name for its callers outside the diff and Read those call sites (about 10 files at most; name the rest under
    `Not checked:`).
-3. Run the test command named in your prompt once, exactly as written (not the tickets' own commands). A failing test is a Spec finding, unless `<feature>/baseline*.md` shows the same failure before the feature started: then it is pre-existing, mention it in one line and do not count it.
+3. Run the test command named in your prompt once, exactly as written (not the tickets' own commands). It runs every
+   suite and compares failures with `<feature>/baseline*.md` itself: its last line `TEST FAIL` lists the NEW failing
+   tests, each a Spec finding; failures it counts as baseline are pre-existing (mention them in one line, do not count
+   them). A suite that did not run is a `Not checked:` item, never a pass.
 4. **Spec axis.** Per ticket, compare the diff with its `Acceptance criteria`: missing or partial requirements, behaviour nobody asked for, requirements that look done but are wrong. Quote the criterion. A call site outside the diff that the change
    breaks (old name, removed field, changed signature) is a Spec finding "breaks existing behaviour", citing that
    file and line.
+   A criterion with no test that exercises it (a UI criterion tested only through a helper counts as none) is a Spec
+   finding "untested criterion". A bug ticket whose Result has no `Cause:` line is a Spec finding.
 5. **Reuse check.** For each new function or block in the diff, Grep the repo for an existing function that does the
    same job (by name and by what it does). One that exists and was not used is a Standards finding (not "possible"),
    naming the helper and its file:line, with a fix ticket.

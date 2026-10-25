@@ -7,7 +7,7 @@ Status: todo          # todo | in-progress | review | blocked | done
 Round: 0              # fix tickets: original + 1; Round 3 is never dispatched
 Blocked by: None      # ticket numbers, or None
 Terms: <domain words the dev needs, from the glossary>
-Seam: <the public interface the one test goes through>
+Seam: <the public interface the tests go through (one test per acceptance criterion)>
 Test command: <runs only this ticket's test>
 Verify: <planner check after review, or None>   # e.g. API suite that needs a running server and DB
 

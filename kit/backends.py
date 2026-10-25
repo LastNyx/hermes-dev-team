@@ -67,6 +67,9 @@ class Claude:
                "--max-turns", str(job["turns"]), "--output-format", "stream-json", "--verbose", "--no-session-persistence"]
         if job["effort"]:
             cmd += ["--effort", job["effort"]]
+        # measured (2.1.302): a `cd` inside an allowed command persisted into later calls (a second `cd ui && ...`
+        # failed in `ui/`); with this set, `pwd` after `cd src && ls` printed the repo root again.
+        job["env"]["CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR"] = "1"
         return cmd, job["model"]
 
     @staticmethod

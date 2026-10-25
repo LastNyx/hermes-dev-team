@@ -6,6 +6,29 @@ mark an entry **action** when another machine must do something (re-run `link-sk
 Format: version, date, then one line per change, naming the file. **watch:** marks a change to the run files that
 hermes-dev-watch reads (`docs/watch-contract.md`).
 
+## 0.15.0 - 2026-10-25
+
+- `kit/run-worker.py`: every `./` and `**/` permission rule is written absolute (`anchor_rules`), and `kit/backends.py`
+  sets `CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR=1`. Measured: both rule forms follow the worker shell's `cd`; after a
+  `cd ui && npx vitest run` test command the dev could not write its `## Result` or dev-notes (27 of 36 dev runs on
+  one feature ended `FAIL could not write Result` with the code committed), and `Edit(**/package.json)` stopped
+  covering the root package.json. `docs/backend-claude.md` rule 21.
+- `kit/suites.py` (new): `.team.json` `test` may be a list of suites, each with its own `cwd`. Every suite runs even
+  after one fails; failing test names (unittest, pytest, vitest, jest) are compared with `<feature>/baseline.md` and
+  only new ones fail. Reviewers now run `suites.py --feature <f>` instead of the raw command. Measured: an
+  `a && cd ui && b` chain stopped at two baseline errors and never ran the UI suite in any review of one feature.
+  The old string `test` still works.
+- `kit/scratch.py baseline`: runs every suite and records the failing test names for `suites.py`. A baseline.md
+  written before 0.15.0 has no name list: re-run `baseline --force` or every failure counts as new.
+- `kit/roles/dev.md`: one test per acceptance criterion (was ONE test); a UI criterion is tested on the component;
+  bug tickets reproduce first and the Result has a `Cause:` line (`UNCONFIRMED` when only a real run shows it).
+  `kit/roles/reviewer.md`: reads `suites.py`'s verdict; an untested criterion and a bug Result without `Cause:` are
+  Spec findings. Measured: these were the recurring review findings on one 38-ticket feature.
+- `skills/orchestrate` 0.10.0: step 6 shows the `Cause:` line; `config.md` documents suite lists; ticket template Seam.
+- Tests: `tests/permission_paths.py` (7, `--real` 10), `tests/suite_runner.py` (15).
+- **action** after pull: a project whose `test` is a `cd` chain should move to a suite list (`config.md`); start a new
+  planner session (skill text changed).
+
 ## 0.14.2 - 2026-10-23
 
 - `skills/orchestrate/references/tickets.md`: new "Screens are acceptance criteria" rule (one `UI:` criterion per

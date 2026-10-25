@@ -46,6 +46,12 @@ Hermes backend is the agnostic fallback, enforced only by the prompt and the lau
 
 20. **Run files have an outside reader.** `runs.log`, `runs/<id>.progress.log` and `runs/*.lock` are parsed by hermes-dev-watch (`docs/watch-contract.md`). Append new fields at the end, keep role names `[a-z]+`, run `tests/watch_contract.py`, and bump `teamcfg.RUN_FORMAT` for anything an old reader would misread.
 
+21. **Path rules follow the shell's `cd`.** `./x` and `**/x` in a rule resolve from the worker's current folder, and a
+    `cd` inside an allowed command persists. After `cd ui && npx vitest run`, `Edit(./**)` meant `ui/**` (the Result,
+    dev-notes and code outside `ui/` denied in 27 of 36 runs of one feature) and `Edit(**/package.json)` no longer
+    covered the root package.json. The launcher writes every rule absolute (`anchor_rules`) and sets
+    `CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR=1`; measured 2.1.302, `tests/permission_paths.py --real`.
+
 ## Known hole
 
 The allowed test command runs code the worker wrote, so it can execute anything. Review before merge is the defence.

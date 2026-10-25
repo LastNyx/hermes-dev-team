@@ -1,7 +1,7 @@
 ---
 name: orchestrate
 description: Run dev, reviewer, docs, researcher workers; verify results.
-version: 0.9.2
+version: 0.10.0
 author: hermes-dev-team contributors
 license: MIT
 platforms: [linux, macos, windows]
@@ -28,8 +28,8 @@ folder.
 ## Setup and references
 
 Python 3; a clean git tree; `KIT` = the team repo's `kit/` (absolute, forward slashes). Each project has a
-`.team.json` with its full test command (`{"test": "npm test"}`); if missing, ask for it once and write only that (the
-dev cannot edit it). Never ask about models, backend or effort unless the user does. Glossary: `CONTEXT.md` if the
+`.team.json` with its full test command (`{"test": "npm test"}`, or one suite per folder: `config.md`); if missing, ask
+for it once and write only that (the dev cannot edit it). Never ask about models, backend or effort unless the user does. Glossary: `CONTEXT.md` if the
 repo has one, else `GLOSSARY.md`; never create the second.
 
 Load a reference with `skill_view(name="orchestrate", file_path="references/<file>")` only when its trigger applies:
@@ -78,7 +78,8 @@ Load a reference with `skill_view(name="orchestrate", file_path="references/<fil
    dev refuses a dirty tree). Show the user `git status --short`, `git diff --stat` and the reason; they commit or
    discard. You may commit only on their explicit yes for that diff, with a subject NOT ending `(<ticket file>)`.
    Then step 6 and `scratch.py decide`. With `enforce=prompt-only` in the RESULT, also load `config.md`.
-6. **Verify**: `git log --stat -1`, the ticket's `Test command`, `git status --short`. Then the ticket's `Verify:`
+6. **Verify**: `git log --stat -1`, the ticket's `Test command`, `git status --short`; for a bug ticket show the user
+   the Result's `Cause:` line. Then the ticket's `Verify:`
    line if you can run it alone now (`tickets.md`). Record the move with what you saw:
    `scratch.py status <feature> <NN> review --verify "PASS|FAIL|SKIP: <what you saw>"` (quick lane: `done`; SKIP for a
    check that waits). A gap you find becomes a fix ticket (`tickets.md`) plus a `decide` line. FAIL in the test

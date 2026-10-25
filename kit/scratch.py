@@ -29,6 +29,7 @@ import argparse, datetime, json, os, pathlib, re, subprocess, sys, time
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import teamcfg  # noqa: E402
 import plannerlog as pl  # noqa: E402
+import suites  # noqa: E402
 
 ENV = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
 GITIGNORE = "# per-run files: result JSON, progress logs, prompts, the worker lock (runs.log is kept)\nruns/\n"
@@ -228,7 +229,8 @@ def cmd_baseline(a):
     listed there as pre-existing, not as their findings.
     """
     tc, scratch, repos = ctx()
-    cmd = tc["cfg"].get("test")
+    plan = suites.suites(tc["cfg"])
+    cmd = None if isinstance(plan, str) else plan
     fd = scratch / a.feature
     if not fd.is_dir():
         print(f"BASELINE STOP no feature folder {fd.as_posix()}"); return 1
@@ -242,17 +244,24 @@ def cmd_baseline(a):
     if ahead not in ("0", None) and not a.force:
         print(f"BASELINE STOP the branch already has {ahead} commit(s) beyond {mb}; run it before the first ticket "
               "(or --force to record the current state)"); return 1
-    try:
-        r = subprocess.run(cmd, shell=True, cwd=repo, capture_output=True, text=True, env=ENV, timeout=a.timeout)
-    except subprocess.TimeoutExpired:
-        print(f"BASELINE STOP `{cmd}` ran longer than {a.timeout}s; pass --timeout <seconds>"); return 1
-    tail = "\n".join((r.stdout + r.stderr).strip().splitlines()[-a.lines:])
+    results = [suites.run_suite(repo, n, c, d, a.timeout) for n, c, d in cmd]
+    late = [r["name"] for r in results if r["code"] is None]
+    if late:
+        print(f"BASELINE STOP suite(s) {', '.join(late)} ran longer than {a.timeout}s; pass --timeout <seconds>"); return 1
+    head = git(repo, "rev-parse", "--short", "HEAD")
+    body = [f"# Baseline: {a.feature} ({repo.name})", "",
+            f"Before the first ticket, at {head}. Failures below already existed on {mb}; they are not this feature's "
+            "findings. A NEW failure is.", ""]
+    for r in results:
+        tail = "\n".join(r["tail"].splitlines()[-a.lines:])
+        body += [f"### {r['name']}: `{r['cmd']}` in `{r['cwd']}` exited {r['code']}", "", "```text", tail, "```", ""]
     p = fd / ("baseline.md" if len(repos) <= 1 else f"baseline-{repo.name}.md")
-    p.write_text(f"# Baseline: {a.feature} ({repo.name})\n\nBefore the first ticket, at {git(repo, 'rev-parse', '--short', 'HEAD')}: "
-                 f"`{cmd}` exited {r.returncode}. Failures below already existed on {mb}; they are not this feature's "
-                 f"findings. A NEW failure is.\n\n```text\n{tail}\n```\n", encoding="utf-8")
-    sha = commit_scratch(scratch, f"baseline: {a.feature} exit {r.returncode}")
-    print(f"BASELINE OK exit {r.returncode} -> {p.relative_to(scratch).as_posix()}" + (f" committed {sha}" if sha else ""))
+    p.write_text("\n".join(body) + "\n" + suites.baseline_block(results), encoding="utf-8")
+    codes = ",".join(f"{r['name']}={r['code']}" for r in results)
+    sha = commit_scratch(scratch, f"baseline: {a.feature} {codes}")
+    named = sum(len(r["failing"]) for r in results)
+    print(f"BASELINE OK {codes}, {named} failing test(s) recorded -> {p.relative_to(scratch).as_posix()}"
+          + (f" committed {sha}" if sha else ""))
     return 0
 
 

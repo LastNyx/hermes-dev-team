@@ -15,7 +15,7 @@ toy repos (Claude Code 2.1.296 unless noted). Backend details: [backend-claude.m
 - **Workers** = headless runs started by `kit/run-worker.py`: dev (one ticket), reviewer (one feature), docs (after review), researcher (read-only, outside the product repo). Serial: one worker at a time, one branch, no worktrees.
 - **Channel** = files in `.scratch/<feature>/` (untracked by the product repo, their own small git repo) and the git branch. The planner reads one `RESULT` line per run and a few git commands, never a transcript.
 - **The user merges** (`git merge --no-ff`). No agent merges or deletes branches. Workers never push; the planner pushes only on "switching".
-- **Grill before build**; vertical-slice tickets with ONE test at a pre-agreed seam (keeps each dev run to one commit). **Review before merge**, on two separate axes (Spec, Standards) so one cannot hide the other: a reviewer run after the merge saw an empty diff.
+- **Grill before build**; vertical-slice tickets with one test per acceptance criterion at a pre-agreed seam, one commit per dev run (until 0.15.0 ONE test: UI criteria then went untested and came back as review findings). **Review before merge**, on two separate axes (Spec, Standards) so one cannot hide the other: a reviewer run after the merge saw an empty diff.
 
 ## Backends and adapter
 
@@ -25,6 +25,8 @@ toy repos (Claude Code 2.1.296 unless noted). Backend details: [backend-claude.m
 | `tests/backend_smoke.py <backend>`: one trivial ticket per backend, on demand (calls a model) | Hermes had 0 runs across four projects; the unused path must be known to work before it is needed. |
 | Claude: deny by default (`defaultMode: dontAsk`) + per-role allow-list | A string-matching hook was bypassed with `python -c subprocess`; the allow-list blocked every bypass, compound commands included. |
 | Claude: `--setting-sources ""` and `--agents <file>` | A repo's `.claude/settings.json` cannot widen a worker (a hostile `Bash(*)` was ignored). Role prompts come from the kit. |
+| Claude: every path rule absolute (`anchor_rules`), shell kept in the repo between calls | `./` and `**/` follow the worker's `cd`: 27 of 36 dev runs on one feature could not write their Result after a `cd ui && vitest` test command; a root package.json became editable. |
+| Full suites: `.team.json` `test` may list suites with a `cwd`; workers run `kit/suites.py`, which runs every suite and judges failures against `baseline.md` by test name | An `a && cd ui && b` chain stopped at two baseline errors and the UI suite never ran in any review of one feature. |
 | Claude: grant writes with `Edit(path)`, never `Write(path)`; deny beats allow | `Edit` rules govern both tools; a `Write(...)` allow rule granted nothing. |
 | Every role prompt ends with the backend's tool rules (`_tool-rules.md` / `_tool-rules-hermes.md`) | Claude: without "one command per Bash call, no cd/&&", workers chained commands, were denied and quit; with them, 0 denials. Hermes: with the forbidden list the worker refused all 4 forbidden chores; without it, it checked out main and back, wrote outside the repo, edited package.json and pushed. |
 | Hermes runs are tagged `enforce=prompt-only` and judged by the same after-run guards | `-t file,terminal` blocks nothing inside the shell and headless approvals are off. The guards are the only enforcement on every backend. |

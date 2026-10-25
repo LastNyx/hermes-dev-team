@@ -9,7 +9,7 @@ Write only `test` plus what the user named; every other key has a working defaul
 
 | Key | Meaning |
 |---|---|
-| `test` | the full test command (reviewer runs it; dev uses the ticket's `Test command:`) |
+| `test` | the full suites: a command string, or a list `[{"name": "py", "cmd": "..."}, {"name": "ui", "cmd": "npx vitest run", "cwd": "ui"}]` (never `cd x && ...` chains). Workers run them through `kit/suites.py`, which runs every suite and ignores failures named in `baseline.md`; dev uses the ticket's `Test command:` |
 | `models` | per role, Claude runs only, e.g. `{"dev": "sonnet"}` |
 | `effort` | `"medium"`, or per role |
 | `protected` | more file-name globs the dev may not edit, on top of the launcher's package/lock/test-config list |

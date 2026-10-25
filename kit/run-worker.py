@@ -137,7 +137,30 @@ def scratch_rule(rule, scratch, repo):
     return f"{m.group(1)}({perm_path(scratch)}{m.group(2) or ''})"
 
 
+def anchor_rules(settings, repo):
+    """Rewrite every `Tool(./x)` and `Tool(**/x)` permission rule onto the absolute repo path (`Tool(//<repo>/x)`).
+
+    measured (Claude Code 2.1.302): both forms resolve from the worker shell's CURRENT folder, not the repo root. After
+    an allowed `cd ui && npx vitest run`, `Edit(./**)` only matched `ui/**`: the ticket's `## Result`,
+    `.scratch/dev-notes.md` and code outside `ui/` were denied (27 of 36 dev runs on one feature); after `cd src`,
+    `Edit(**/package.json)` no longer denied the root package.json, and `Edit(./.git/**)` pointed at `src/.git`. Written
+    absolute, every rule held after the `cd`.
+    """
+    root = perm_path(repo)
+    for key in ("allow", "deny"):
+        settings["permissions"][key] = [re.sub(r"^(\w+)\((\./|\*\*/)",
+                                               lambda m: f"{m.group(1)}({root}/{'**/' if m.group(2) == '**/' else ''}", r)
+                                        for r in settings["permissions"].get(key, [])]
+
+
 RAW_GIT_READ = re.compile(r"Bash\(git (log|diff|show)\b")
+
+
+def suites_cmd(feature):
+    """The full-suite command a worker runs: kit/suites.py runs every `.team.json` suite in its own folder and judges
+    failures against the feature's baseline (a `a && cd ui && b` chain stopped at baseline errors before `b`)."""
+    return (f"{pathlib.Path(sys.executable).as_posix()} {(KIT / 'suites.py').as_posix()}"
+            + (f" --feature {feature}" if feature and feature != "-" else ""))
 
 
 def git_ro_cmd():
@@ -481,10 +504,10 @@ def main():
     turns = a.max_turns or turns
     effort = cfg.get("effort")
     effort = a.effort or ((effort or {}).get(a.role) if isinstance(effort, dict) else effort)
-    test_cmd = a.test_cmd or (header_line(ticket, "Test command") if a.role == "dev" else None) or \
-        (cfg.get("test") if a.role not in ("docs", "researcher") else None)
     target = ticket or prompt_path(a.prompt, "feature") or prompt_path(a.prompt, "out")
     feature = target.relative_to(scratch).parts[0] if target and scratch in target.parents else "-"
+    test_cmd = a.test_cmd or (header_line(ticket, "Test command") if a.role == "dev" else None) or \
+        (suites_cmd(feature) if a.role not in ("docs", "researcher") and cfg.get("test") else None)
 
     settings = json.loads(settings_file.read_text(encoding="utf-8"))
     settings["includeCoAuthoredBy"] = False                      # always, whatever the role file says
@@ -539,6 +562,7 @@ def main():
         settings["permissions"]["allow"].append(f"Bash({test_cmd})")
         # measured: without this line a reviewer ran the ticket's narrower command and was denied
         prompt += f"\nThe only test command you may run is exactly: {test_cmd}"
+    anchor_rules(settings, repo)                               # last: every `./` rule above becomes absolute
 
     runs = scratch / "runs"; runs.mkdir(parents=True, exist_ok=True)
     stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")

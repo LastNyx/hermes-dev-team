@@ -76,7 +76,8 @@ the root, one feature branch.
 {"test": "pnpm -r test", "protected": ["vitest.workspace.*"]}
 ```
 
-- `test` is the full suite (the reviewer runs it). A ticket's `Test command:` can narrow it to one package, e.g.
+- `test` is the full suite (the reviewer runs it through `kit/suites.py`). Several suites in different folders go in a
+  list, `[{"name": "py", "cmd": "..."}, {"name": "ui", "cmd": "npx vitest run", "cwd": "ui"}]`, never a `cd` chain. A ticket's `Test command:` can narrow it to one package, e.g.
   `pnpm --filter api test`; the dev runs only that.
 - Protected files match by file name at any depth, so every package's `package.json`, `tsconfig*.json` and test
   config is already protected. Add workspace-level files (e.g. `pnpm-workspace.yaml`) to `protected` if they decide

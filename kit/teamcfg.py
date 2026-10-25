@@ -8,7 +8,7 @@ Lookup, from the repo root (or any folder):
    overrides them per repo. Scratch defaults to <workspace>/.scratch.
 Relative paths in a config resolve from the folder the config file sits in.
 
-Keys: test, models, protected (as before), docs_edit (repo-relative files the docs worker may also edit), shared (true: other people work in the repo; see orchestrate),
+Keys: test (a command string, or a list of {name, cmd, cwd} suites run by suites.py), models, protected (as before), docs_edit (repo-relative files the docs worker may also edit), shared (true: other people work in the repo; see orchestrate),
 scratch (folder for tickets, reviews, runs), rules (file or list of files
 pasted into every worker prompt; default: the repo's AGENTS.md and CLAUDE.md, whichever exist, in that order), rules_max_chars (default 40000), path (folders put in
 front of PATH for the worker, e.g. ["~/.local/bin"]).
