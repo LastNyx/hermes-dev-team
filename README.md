@@ -127,6 +127,27 @@ If other people commit to the repo with their own workflow, the kit stays your p
 scratch folder, run `python KIT/scratch.py baseline <feature>` before the first ticket, and bring main in only between
 batches with `python KIT/scratch.py sync-main --apply`. See the orchestrate skill's `references/shared-repo.md`.
 
+## Talking to the planner
+
+Plain words in the planner chat; nothing else to remember.
+
+| You say | The planner |
+|---|---|
+| "resume <repo>" (or open a new session on the project) | runs step 0, `scratch.py resume`, and shows the state of every feature |
+| "build" / "go" (tickets approved) | starts the loop: dispatch, verify, review, docs, one ticket at a time |
+| "go with recommendation" / "agree" | takes the answer it recommended and logs it with `scratch.py decide` |
+| "keep going" / "decide yourself" / "continue till finish" | logs a `delegated:` decision, then runs the whole queue without asking: more review rounds, small fixes done itself; stops only for merge, push or a real-account step, and reports once at the end |
+| "stop the worker" | `scratch.py stop` (never a raw process kill) |
+| "switching" | `scratch.py switch`: pushes the scratch repo and feature branch for your other machine |
+| "merge" | nothing: it tells you the branch is ready; you run `git merge --no-ff` |
+
+Small changes are routed by size on their own (`references/lanes.md`): a trivial fix the planner does itself inside
+`scratch.py check-run`, a small one is a quick-lane ticket, anything larger the full lane. You don't need to ask.
+
+**One worker at a time, always.** There is no word that starts workers in parallel: the launcher's lock refuses a
+second one, even from another chat. Several tickets run as a queue, one after another, which "keep going" does for
+you. A reviewer beside the dev (git worktrees) is deferred: after 0.15.0 the time it would save is small.
+
 ## Resume and switching machines
 
 There is no handoff file. The scratch folder (tickets, `batches.md`, reviews, `runs.log`, and one `decisions.md` per
