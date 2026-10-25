@@ -22,6 +22,8 @@ hermes-dev-watch reads (`docs/watch-contract.md`).
   tracked `.scratch`) -> `references/switching.md` (trigger widened); fix-ticket ids -> `references/tickets.md`;
   backend smoke and the test-command hole -> `references/changing-skills.md`. 1,489 -> 1,335 words. **re-copy**.
 - Tests: `tests/check_run.py` (9).
+- `README.md` command list (`baseline`, `suites.py`, `check-run`), `TEAM.md` (planner trivial lane, reviewer's suite
+  command, absolute path rules): docs follow-up after the 0.16.0 push.
 - **action**: start a new planner session (skill text changed).
 
 ## 0.15.0 - 2026-10-25

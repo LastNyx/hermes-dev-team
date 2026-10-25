@@ -141,6 +141,9 @@ python KIT/scratch.py init --clone <private-url>    # first time on the other ma
 python KIT/scratch.py stop                          # force-stop the running worker
 python KIT/scratch.py status <feature> NN review --verify "PASS: ..."   # planner: Status + Verify, logged
 python KIT/scratch.py decide <feature> "<what you decided>"             # planner: a chat decision, logged
+python KIT/scratch.py baseline <feature>                                # before the first ticket: what already fails, by test name
+python KIT/suites.py --feature <feature>                                # every suite; only failures not in the baseline count
+python KIT/scratch.py check-run begin|end                               # planner: guards around its own trivial fix
 ```
 
 A project that used the kit before 0.11.0: follow [EXISTING-PROJECTS.md](EXISTING-PROJECTS.md) on each machine.
