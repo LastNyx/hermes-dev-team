@@ -1,7 +1,7 @@
 ---
 name: orchestrate
 description: Run dev, reviewer, docs, researcher workers; verify results.
-version: 0.11.0
+version: 0.11.1
 author: hermes-dev-team contributors
 license: MIT
 platforms: [linux, macos, windows]
@@ -92,7 +92,8 @@ Load a reference with `skill_view(name="orchestrate", file_path="references/<fil
    this batch were built earlier (empty diff). Write it into `batches.md`. Show the user the review's `Not checked:`.
    PASS: run each `Verify` that had to wait (server, database, the user's yes), set the tickets `done` with
    `scratch.py status --verify`, record HEAD as the next base, back to step 3.
-   FAIL: it wrote `review-<b>-<n>.md` and fix tickets; dispatch them (step 4), add them to `tickets:`, review again with
+   FAIL: before dispatching, check each finding against the code and its ticket; one the code disproves, or that is
+   outside the ticket, gets a `decide` line and no fix ticket. It wrote `review-<b>-<n>.md` and fix tickets; dispatch them (step 4), add them to `tickets:`, review again with
    round n+1 and the same base. Never dispatch round 3: ask the user (unless a `delegated:` decision exists: `lanes.md`).
 9. **Docs** (full lane, all `done`): `python KIT/run-worker.py docs "feature: .scratch/<feature>"`. Tell the user the
    `drift.md` items. More than three files to edit: split the job or give it a `<feature>/docs-facts.md`.
@@ -103,6 +104,9 @@ Load a reference with `skill_view(name="orchestrate", file_path="references/<fil
 
 ## Pitfalls
 
+- Between tool calls, write at most one short line; tickets, `decisions.md`, RESULT lines and `scratch.py` logs are the
+  record. This never shortens what the user must read: the resume report, `Not checked:`, `Cause:`, `drift.md` items,
+  the ticket table and the final report.
 - Never run two workers at once; the launcher's lock enforces it.
 - The dev's commit subject ends `(<ticket file name>)`; step 0 finds finished tickets by it. Your own commits must not.
 - `FAIL guard:`: `pushed` -> tell the user (they fix the remote); `test-config-changed` or a denial on package/test

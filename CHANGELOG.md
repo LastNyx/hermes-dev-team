@@ -6,6 +6,14 @@ mark an entry **action** when another machine must do something (re-run `link-sk
 Format: version, date, then one line per change, naming the file. **watch:** marks a change to the run files that
 hermes-dev-watch reads (`docs/watch-contract.md`).
 
+## 0.16.1 - 2026-10-26
+
+- `skills/orchestrate` 0.11.1 (ideas from obra/superpowers; its TDD skill rejected, `dev.md` already works test-first):
+  step 8 checks each review finding against the code and its ticket before writing a fix ticket (disproved or
+  out-of-ticket findings get a `decide` line only); Pitfalls: one short line between tool calls, never shortening
+  what the user must read.
+- **action**: start a new planner session (skill text changed).
+
 ## 0.16.0 - 2026-10-25
 
 - `kit/scratch.py check-run begin|end` (new): the launcher's own `snapshot`/`guards_after` around the planner's trivial
