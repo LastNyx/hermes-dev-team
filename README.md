@@ -144,9 +144,12 @@ Plain words in the planner chat; nothing else to remember.
 Small changes are routed by size on their own (`references/lanes.md`): a trivial fix the planner does itself inside
 `scratch.py check-run`, a small one is a quick-lane ticket, anything larger the full lane. You don't need to ask.
 
-**One worker at a time, always.** There is no word that starts workers in parallel: the launcher's lock refuses a
-second one, even from another chat. Several tickets run as a queue, one after another, which "keep going" does for
-you. A reviewer beside the dev (git worktrees) is deferred: after 0.15.0 the time it would save is small.
+**One worker at a time, unless the project turns on parallel dev (0.17.0).** With `"max_workers": 2` (and a `setup`
+list) in `.team.json`, the planner runs independent dev tickets of one batch together with `scratch.py dispatch
+<feature> 01 02`: each in its own pool worktree (`<repo>.w1`, `.w2`), merged back into the feature branch in ticket
+order. Tickets whose Seams name the same file are refused and run one after another. Reviews, docs and the researcher
+stay serial. Without `max_workers` nothing changes: the lock refuses a second worker and "keep going" runs a queue.
+Design: [docs/open/parallel-workers.md](docs/open/parallel-workers.md).
 
 ## Resume and switching machines
 

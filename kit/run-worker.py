@@ -271,6 +271,22 @@ def short(n):
     return f"{n / 1e6:.1f}M" if n >= 1e6 else f"{round(n / 1e3)}k" if n >= 1e3 else str(n)
 
 
+# Wording of a subscription or API limit in a worker's final message (Claude Code: "Claude AI usage limit reached",
+# "5-hour limit reached"; API: "rate limit"). Only read on a run that did not PASS.
+USAGE_LIMIT = re.compile(r"usage limit|limit reached|rate.?limit|quota exceeded|overloaded", re.I)
+
+
+def claim_stamp(runs, role):
+    """A run stamp nobody else holds: the progress log is created exclusively, a taken second waits for the next."""
+    while True:
+        stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+        try:
+            with open(runs / f"{stamp}-{role}.progress.log", "x", encoding="utf-8"):
+                return stamp
+        except FileExistsError:
+            time.sleep(0.3)
+
+
 def stream_worker(cmd, progress_path, env=None, lock=None):
     """Run a backend's command with stream-json, print + log one line per tool call and per denial; return the final
     `result` event (the backend's `result()` reads it).
@@ -312,15 +328,15 @@ def write_lock(lock, **upd):
     """Write the worker lock (see teamcfg.py). Keeps a `stop_requested` that scratch.py stop wrote meanwhile."""
     lock.update(upd)
     p = pathlib.Path(lock["path"])
-    old, _ = teamcfg.read_lock(p.parent.parent)
+    old, _ = teamcfg.read_lock_file(p)
     if old and old.get("stop_requested") and old.get("launcher_pid") == lock["launcher_pid"]:
         lock["stop_requested"] = old["stop_requested"]
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps({k: v for k, v in lock.items() if k != "path"}), encoding="utf-8")
+    p.write_text(json.dumps({k: v for k, v in lock.items() if k not in ("path", "_path")}), encoding="utf-8")
 
 
 def stop_requested(lock):
-    d, _ = teamcfg.read_lock(pathlib.Path(lock["path"]).parent.parent)
+    d, _ = teamcfg.read_lock_file(lock["path"])
     return bool(d and d.get("stop_requested"))
 
 
@@ -477,6 +493,7 @@ def main():
                     help="effort / reasoning; default .team.json effort (string or per-role map), else the backend's")
     ap.add_argument("--backend", choices=["claude", "hermes", "auto"], help="default: .team.json backend, else auto")
     ap.add_argument("--web", action="store_true", help="researcher only: allow web fetch/search for this run")
+    ap.add_argument("--slot", type=int, help="pool slot N (set by scratch.py dispatch): lock runs/slot-N.lock")
     a = ap.parse_args()
     if not a.role or a.prompt is None:
         ap.error("role and prompt are required")
@@ -489,6 +506,7 @@ def main():
 
     tc = teamcfg.load()
     cfg, scratch, repo = tc["cfg"], tc["scratch"], pathlib.Path.cwd().resolve()
+    repo_name = os.environ.get("HDT_SLOT_OF") or repo.name       # a pool slot reports as the repo it belongs to
     be = backends.pick(a.role, cfg, a.backend)
     err = be.setup_error(cfg)
     if err:
@@ -497,8 +515,8 @@ def main():
         print(f"RESULT {a.role} ERROR --web is for the researcher only"); return 2
     ticket = prompt_path(a.prompt, "ticket")
     want_repo = header_line(ticket, "Repo")
-    if want_repo and want_repo != repo.name:
-        print(f"RESULT {a.role} ERROR ticket is for repo {want_repo}, cwd is {repo.name}"); return 2
+    if want_repo and want_repo != repo_name:
+        print(f"RESULT {a.role} ERROR ticket is for repo {want_repo}, cwd is {repo_name}"); return 2
     model, turns = DEFAULTS.get(a.role, ("sonnet", 25))
     model = a.model or (cfg.get("models") or {}).get(a.role) or model
     turns = a.max_turns or turns
@@ -520,7 +538,7 @@ def main():
     if docs_edit:                                              # repo-relative files the project's AGENTS.md names
         settings["permissions"]["allow"] += [f"Edit(./{p.removeprefix('./')})" for p in docs_edit]
         prompt += "\nYou may also edit these files (the project's rules say what goes in them): " + ", ".join(docs_edit)
-    outside = scratch != repo / ".scratch"
+    outside = scratch != repo / ".scratch"                   # always true in a pool slot: scratch is the main checkout's
     if outside or be is backends.Hermes:                       # hermes: absolute paths, its cwd is not the repo
         for key in ("ticket", "feature"):
             pp = prompt_path(prompt, key)
@@ -565,7 +583,7 @@ def main():
     anchor_rules(settings, repo)                               # last: every `./` rule above becomes absolute
 
     runs = scratch / "runs"; runs.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    stamp = claim_stamp(runs, a.role)                          # unique even when two slots start in the same second
     out_path = runs / f"{stamp}-{a.role}.json"
     rules, rules_full, rules_used = project_rules(tc["rules"], tc["rules_max_chars"])
     rules_block = ("\n\n## Project rules (imports inlined; they bind you unless a tool rule below forbids the "
@@ -577,7 +595,7 @@ def main():
     if branch_before in ("main", "master") and a.role != "researcher":   # the researcher never commits
         print(f"RESULT {a.role} ERROR refusing to run on {branch_before}; check out the feature branch"); return 2
     snap = snapshot(protected)
-    st = {"role": a.role, "model": model, "test_cmd": test_cmd, "feature": feature, "repo_name": repo.name,
+    st = {"role": a.role, "model": model, "test_cmd": test_cmd, "feature": feature, "repo_name": repo_name,
           "scratch": scratch.as_posix(), "stamp": stamp, "ticket": ticket.name if ticket else None}
     cut = f" rules={'+'.join(rules_used) or 'none'}"
     if rules_full > tc["rules_max_chars"]:
@@ -592,12 +610,18 @@ def main():
            "branch": branch_before, "cfg": cfg, "env": env, "bash": a.role != "researcher", "web": a.web}
 
     # One worker at a time, across planner sessions too: a live lock refuses; a stale one (launcher gone) is replaced.
-    held, alive = teamcfg.read_lock(scratch)
+    # A pool slot (scratch.py dispatch) refuses only a serial run or its own slot (0.17.0).
+    if a.slot:
+        held, alive = next(((h, al) for h, al in (teamcfg.read_lock_file(teamcfg.lock_path(scratch)),
+                                                  teamcfg.read_lock_file(teamcfg.lock_path(scratch, a.slot))) if al),
+                           (None, False))
+    else:
+        held, alive = teamcfg.read_lock(scratch)
     if alive:
         print(f"RESULT {a.role} ERROR worker already running: {held.get('role')} {held.get('ticket') or '-'} "
               f"since {held.get('stamp')} (wait for its exit, or `scratch.py stop`)"); return 2
-    lock = {"path": str(teamcfg.lock_path(scratch)), "launcher_pid": os.getpid(), "role": a.role,
-            "ticket": st["ticket"], "feature": feature, "repo": repo.name, "stamp": stamp, "fmt": teamcfg.RUN_FORMAT}
+    lock = {"path": str(teamcfg.lock_path(scratch, a.slot)), "launcher_pid": os.getpid(), "role": a.role,
+            "ticket": st["ticket"], "feature": feature, "repo": repo_name, "stamp": stamp, "fmt": teamcfg.RUN_FORMAT}
     write_lock(lock)
     try:
         rskip = RESEARCH_SKIP + list(cfg.get("research_skip") or [])
@@ -614,6 +638,8 @@ def main():
         verdict = verdict_of(r["text"], r["subtype"], guards)
         if r["extra"] and verdict.startswith("PASS"):
             verdict = f"FAIL {r['extra']} | {verdict}"
+        if not verdict.startswith("PASS") and USAGE_LIMIT.search(r["text"] or ""):
+            verdict = f"FAIL usage-limit | {verdict}"          # 0.17.0: the planner pauses the queue, no redispatch
         if stop_requested(lock):
             verdict = f"FAIL force-stopped | {verdict}"
         return report(st, verdict, r["turns"], secs, r["usage"], r["cost"], r["denials"], out_path, be.name)

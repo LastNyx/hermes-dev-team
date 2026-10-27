@@ -6,6 +6,32 @@ mark an entry **action** when another machine must do something (re-run `link-sk
 Format: version, date, then one line per change, naming the file. **watch:** marks a change to the run files that
 hermes-dev-watch reads (`docs/watch-contract.md`).
 
+## 0.17.0 - 2026-10-27
+
+- **Parallel dev workers** (opt-in; grill log `docs/open/parallel-workers.md` D1-D13). `.team.json` `max_workers`
+  (default 1 = serial, nothing changes) and `setup` (commands that install dependencies in a new worktree).
+- `kit/scratch.py dispatch <feature> NN NN [--dry-run] [--extra ...]` (new): refuses tickets whose Seam paths overlap,
+  that block each other, more than `max_workers`, a dirty tree or a running worker; runs one dev per pool worktree
+  (`<repo>.w1`, `<repo>.w2`, reused, `setup` re-run only when a lockfile changes) on a local ticket branch
+  `<feature>--NN`; merges each PASS branch into the feature branch in ticket order (`--no-ff`) and deletes it with
+  `git branch -d`; a conflict is aborted and reported `FAIL conflict` (branch kept); one scratch commit at the end.
+- `kit/parallel.py` (new): Seam parsing and overlap, the pool, the group run and the merge.
+- `kit/run-worker.py`: `--slot N` locks `runs/slot-N.lock` (a serial run still refuses while any lock is live);
+  `HDT_CONFIG` / `HDT_SLOT_OF` make a slot use the main checkout's config, scratch and repo name; run stamps are
+  claimed exclusively (two slots in one second); a failed run whose message reads like a usage or rate limit is
+  `FAIL usage-limit` and stops the group's queue (`DISPATCH STOP`).
+- `kit/teamcfg.py`: `read_locks()` (every `runs/*.lock`), `read_lock_file()`; `read_lock()` = the first live lock.
+  **watch:** slot locks are `runs/slot-N.lock` with the same fields as `worker.lock`; hermes-dev-watch already shows
+  every `runs/*.lock`, no format change.
+- `kit/scratch.py stop` stops every live lock; `resume` merges a ticket branch a crash left finished but unmerged,
+  reports a dirty slot (never resets it), leaves an unfinished one for redispatch.
+- `skills/orchestrate` 0.12.0: step 4b (parallel group), lanes.md exception; README "Talking to the planner" updated;
+  `docs/design.md` Shape updated (the kit merges its own ticket branches).
+- Tests: `tests/parallel_dispatch.py` (24, fake `claude`, no model), `tests/parallel_real.py` (5, two real Sonnet
+  dev runs: 16 s + 15 s ran in 17 s wall).
+- **action**: start a new planner session (skill text changed). To use it in a project, add `max_workers` and
+  `setup` to its `.team.json`.
+
 ## 0.16.1 - 2026-10-26
 
 - `skills/orchestrate` 0.11.1 (ideas from obra/superpowers; its TDD skill rejected, `dev.md` already works test-first):

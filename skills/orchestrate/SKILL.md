@@ -1,7 +1,7 @@
 ---
 name: orchestrate
 description: Run dev, reviewer, docs, researcher workers; verify results.
-version: 0.11.1
+version: 0.12.0
 author: hermes-dev-team contributors
 license: MIT
 platforms: [linux, macos, windows]
@@ -14,7 +14,8 @@ metadata:
 # orchestrate
 
 You are the planner in Hermes. Workers are headless runs started by `kit/run-worker.py` on whichever backend is set
-up (Claude Code or a Hermes worker profile; the launcher picks it). One worker at a time. Keep your own context small:
+up (Claude Code or a Hermes worker profile; the launcher picks it). One worker at a time, except a parallel dev group
+(step 4b). Keep your own context small:
 read result lines and files, never a worker's transcript.
 
 ## When to Use
@@ -72,6 +73,15 @@ Load a reference with `skill_view(name="orchestrate", file_path="references/<fil
    command from the ticket and picks the backend; never retype the one or choose the other. Tell the user the
    `progress:` path from the `START` line, then end your turn; never `process wait` (it blocks heartbeats). Answer a
    heartbeat in one short line with no tool calls. Act only on the exit notice. Same for steps 8 and 9.
+4b. **Parallel dev** (only when `.team.json` has `max_workers` > 1 and a `setup` list): when the batch has two or
+   more `todo` tickets with no blockers between them and Seams that name different files, write them as one group in
+   `batches.md` (`Parallel: 01 02 | 03`) and dispatch the group instead of step 3-4 for each:
+   `python -u KIT/scratch.py dispatch <feature> 01 02` with `terminal(background=true, heartbeat=120)`, cwd = the repo.
+   It refuses overlapping Seams (run those one after another), sets the tickets `in-progress`, runs one dev per pool
+   worktree, then merges each PASS branch into the feature branch in ticket order. Read one RESULT line per ticket
+   and the merge line under it, then step 6 for each merged ticket. `FAIL conflict`: redispatch that ticket alone
+   (step 4) from the new tip. Last line `DISPATCH STOP usage limit hit`: pause the whole queue and tell the user;
+   never redispatch until the limit resets. Never dispatch a reviewer, docs or researcher in a group.
 5. **Read the one RESULT line**: `RESULT dev PASS <sha> | ...` or `RESULT dev FAIL <reason> | ...`, plus any denied
    calls, and show the user the ticket's `Not checked:` line. Exit 0 = PASS and the guards held (main unmoved, branch
    unchanged, no history rewrite, no protected file changed, nothing pushed). Never trust a worker's own exit code.
