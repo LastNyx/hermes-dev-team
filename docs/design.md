@@ -12,9 +12,9 @@ toy repos (Claude Code 2.1.296 unless noted). Backend details: [backend-claude.m
 ## Shape
 
 - **Planner** = the Hermes chat session the user talks to. It grills, writes `CONTEXT.md`, ADRs and tickets, dispatches workers, verifies, and never writes product code. Planning uses Matt Pocock's skills as installed (the 0.2.0 rewrites dropped the scenario and code-cross-check steps and shadowed the upstream names); `orchestrate` adds only the ticket fields (`templates/ticket-header.md.template`) and is the only skill the kit links into Hermes.
-- **Workers** = headless runs started by `kit/run-worker.py`: dev (one ticket), reviewer (one feature), docs (after review), researcher (read-only, outside the product repo). Serial: one worker at a time, one branch, no worktrees.
+- **Workers** = headless runs started by `kit/run-worker.py`: dev (one ticket), reviewer (one feature), docs (after review), researcher (read-only, outside the product repo). Serial by default: one worker at a time, one branch. Since 0.17.0 a project may set `max_workers` > 1: `scratch.py dispatch` then runs independent dev tickets of one batch in pool worktrees, merged into the feature branch by the kit ([open/parallel-workers.md](open/parallel-workers.md)).
 - **Channel** = files in `.scratch/<feature>/` (untracked by the product repo, their own small git repo) and the git branch. The planner reads one `RESULT` line per run and a few git commands, never a transcript.
-- **The user merges** (`git merge --no-ff`). No agent merges or deletes branches. Workers never push; the planner pushes only on "switching".
+- **The user merges** (`git merge --no-ff`) the feature branch into main. No agent merges or deletes a feature branch or main; the only exception is `scratch.py dispatch` merging its own local ticket branches (`<feature>--NN`) into the feature branch and deleting them with `git branch -d` (0.17.0). Workers never push; the planner pushes only on "switching".
 - **Grill before build**; vertical-slice tickets with one test per acceptance criterion at a pre-agreed seam, one commit per dev run (until 0.15.0 ONE test: UI criteria then went untested and came back as review findings). **Review before merge**, on two separate axes (Spec, Standards) so one cannot hide the other: a reviewer run after the merge saw an empty diff.
 
 ## Backends and adapter

@@ -19,6 +19,8 @@ Usage (cwd = the project repo, or the workspace root / any of its repos):
     python <kit>/scratch.py sync-main [--apply]     # shared repo, between batches: merge origin/main into the branch
     python <kit>/scratch.py baseline <feature>      # before the first ticket: record what already fails on main
     python <kit>/scratch.py check-run begin|end     # trivial lane: the launcher's guards around the planner's own fix
+    python <kit>/scratch.py dispatch <feature> NN NN [--dry-run]
+                                                    # parallel dev workers in pool worktrees, merged in order (0.17.0)
 
 `decide` and `status` also write a `planner` line to runs.log (plannerlog.py), so the planner's own actions show in
 hermes-dev-watch next to the workers'.
@@ -31,6 +33,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import teamcfg  # noqa: E402
 import plannerlog as pl  # noqa: E402
 import suites  # noqa: E402
+import parallel  # noqa: E402
 
 ENV = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
 GITIGNORE = "# per-run files: result JSON, progress logs, prompts, the worker lock (runs.log is kept)\nruns/\n"
@@ -472,18 +475,20 @@ def cmd_status(a):
 
 def cmd_stop(a):
     tc, scratch, repos = ctx()
-    lock, alive = teamcfg.read_lock(scratch)
-    if not lock:
+    locks = teamcfg.read_locks(scratch)
+    if not locks:
         print("STOP OK no worker running"); return 0
-    if not alive:
-        print(f"STOP OK no worker running (stale lock from {lock.get('stamp')}, its launcher is gone)")
-        teamcfg.lock_path(scratch).unlink(missing_ok=True)
+    live = [l for l, al in locks if al]
+    for l, al in locks:
+        if not al:
+            pathlib.Path(l["_path"]).unlink(missing_ok=True)
+    if not live:
+        print(f"STOP OK no worker running (stale lock from {locks[0][0].get('stamp')}, its launcher is gone)")
         return 0
-    lock["stop_requested"] = now()
-    teamcfg.lock_path(scratch).write_text(json.dumps(lock), encoding="utf-8")
-    target = lock.get("worker_pid") or lock.get("launcher_pid")
-    killed = teamcfg.kill_tree(target)
-    print(f"  killed {lock.get('role')} worker pid {target}: {killed}")
+    for lock in live[1:]:                                      # parallel slots: stop every one, report the first
+        stop_one(lock)
+    lock = live[0]
+    stop_one(lock)
     t0 = time.time()
     while time.time() - t0 < a.wait and teamcfg.read_lock(scratch)[1]:
         time.sleep(1)
@@ -506,6 +511,14 @@ def cmd_stop(a):
     return 0
 
 
+def stop_one(lock):
+    lock["stop_requested"] = now()
+    pathlib.Path(lock["_path"]).write_text(json.dumps({k: v for k, v in lock.items() if k != "_path"}),
+                                           encoding="utf-8")
+    target = lock.get("worker_pid") or lock.get("launcher_pid")
+    print(f"  killed {lock.get('role')} {lock.get('ticket') or '-'} worker pid {target}: {teamcfg.kill_tree(target)}")
+
+
 def cmd_resume(a):
     tc, scratch, repos = ctx()
     msgs, stop = [], []
@@ -520,10 +533,10 @@ def cmd_resume(a):
                   "then `scratch.py stop`"); return 1
         print(f"RESUME OK worker running: {lock.get('role')} {lock.get('ticket') or '-'} since {lock.get('stamp')}; "
               "wait for its exit notice"); return 0
-    if lock:
-        msgs.append(f"stale worker lock from {lock.get('stamp')} ({lock.get('role')} {lock.get('ticket')}): the "
+    for lk, _ in teamcfg.read_locks(scratch):                  # all stale here (a live one returned above)
+        msgs.append(f"stale worker lock from {lk.get('stamp')} ({lk.get('role')} {lk.get('ticket')}): the "
                     "launcher died; removed")
-        teamcfg.lock_path(scratch).unlink(missing_ok=True)
+        pathlib.Path(lk["_path"]).unlink(missing_ok=True)
     if is_repo_root(scratch):
         sha = commit_scratch(scratch, "resume: uncommitted scratch state")
         if sha:
@@ -570,6 +583,10 @@ def cmd_resume(a):
             for f in foreign_commits(repo):
                 msgs.append(f"WARN {rn} {br}: commit by someone else on the feature branch: {f} "
                             "(one feature branch per person; show the user)")
+        for rn, br in wanted.items():                          # D12: parallel ticket branches left by a crash
+            repo = repos.get(rn)
+            if repo is not None and git(repo, "branch", "--show-current") == br:
+                pending_ticket_branches(repo, br, ts, msgs, stop)
         counts = {}
         for t in ts:
             counts[t["status"]] = counts.get(t["status"], 0) + 1
@@ -608,6 +625,127 @@ def cmd_resume(a):
     if stop:
         print("RESUME STOP " + "; ".join(stop)); return 1
     print("RESUME OK")
+    return 0
+
+
+def pending_ticket_branches(repo, br, ts, msgs, stop):
+    """D12: a `<br>--NN` branch left by an interrupted `dispatch`. Its slot dirty: ask. A dev commit for its ticket on
+    it: merge it now (as dispatch would have). Otherwise: report; the ticket is redispatched."""
+    names = {pl.num(t["name"]): t["name"] for t in ts}
+    slots = {}
+    for block in (git(repo, "worktree", "list", "--porcelain") or "").split("\n\n"):
+        path = re.search(r"^worktree (.+)$", block, re.M)
+        b = re.search(r"^branch refs/heads/(.+)$", block, re.M)
+        if path and b:
+            slots[b.group(1)] = pathlib.Path(path.group(1))
+    for tb in (git(repo, "for-each-ref", "--format=%(refname:short)", f"refs/heads/{br}--*") or "").split():
+        nn = tb[len(br) + 2:]
+        name = names.get(nn)
+        slot = slots.get(tb)
+        if slot and slot != repo and dirty(slot):
+            stop.append(f"{tb}: its slot {slot.name} has uncommitted changes (ask the user; never reset)"); continue
+        own = git(repo, "log", "--format=%h %s", f"{br}..{tb}") or ""
+        if not name or not any(l.rstrip().endswith(f"({name})") for l in own.splitlines()):
+            msgs.append(f"{tb}: no dev commit for ticket {nn}; left as is (redispatch the ticket)"); continue
+        if dirty(repo):
+            stop.append(f"{tb}: finished but the feature tree is dirty; not merging"); continue
+        if slot and slot != repo:
+            git(slot, "checkout", "-q", "--detach")
+        state, detail = parallel.merge_ticket(repo, br, tb, name)
+        if state == "merged":
+            msgs.append(f"{tb}: finished before the interruption; merged into {br} -> {detail}")
+        elif state == "conflict":
+            msgs.append(f"{tb}: CONFLICT merging into {br} ({', '.join(detail)}); branch kept, redispatch {nn}")
+        else:
+            msgs.append(f"{tb}: nothing to merge")
+
+
+def cmd_dispatch(a):
+    """Parallel dev workers (0.17.0): one pool slot per ticket, merged in ticket order. Last line DISPATCH OK|STOP."""
+    tc, scratch, repos = ctx()
+    cfg = tc["cfg"]
+    fd = feature_dir(scratch, a.feature, "DISPATCH")
+    if not fd:
+        return 1
+    max_w = int(cfg.get("max_workers") or 1)
+    if len(a.tickets) < 2:
+        print("DISPATCH STOP give at least two tickets (one ticket: the usual run-worker.py dev)"); return 1
+    if len(a.tickets) > max_w:
+        print(f"DISPATCH STOP {len(a.tickets)} tickets but .team.json max_workers is {max_w}"); return 1
+    if not cfg.get("setup"):
+        print("DISPATCH STOP .team.json has no `setup` (the commands that install dependencies in a fresh worktree)")
+        return 1
+    if tc["source"] is None:
+        print("DISPATCH STOP no .team.json found"); return 1
+    held, alive = teamcfg.read_lock(scratch)
+    if alive:
+        print(f"DISPATCH STOP a worker is running ({held.get('role')} {held.get('ticket') or '-'})"); return 1
+    items, seams, repo_names, branches = [], [], set(), set()
+    group = {nn.split("-")[0] for nn in a.tickets}
+    for nn in a.tickets:
+        t, why = pl.find_ticket(fd, nn)
+        if not t:
+            print(f"DISPATCH STOP {why}"); return 1
+        text, _ = pl.read(t)
+        st, rn, br = field(text, "Status"), one_repo(repos, text), field(text, "Branch")
+        if st not in ("todo", "in-progress"):
+            print(f"DISPATCH STOP {t.name} is {st} (only todo or in-progress tickets run)"); return 1
+        if field(text, "Blocked by") not in (None, "None", "none", "-"):
+            blockers = re.findall(r"\d+[a-z]?", field(text, "Blocked by") or "")
+            open_b = [b for b in blockers if any(pl.num(x["name"]) == b and x["status"] != "done" for x in tickets(fd))]
+            inside = [b for b in blockers if b in group]
+            if open_b or inside:
+                print(f"DISPATCH STOP {t.name} is blocked by {', '.join(open_b or inside)}"); return 1
+        items.append((pl.num(t.name), t)); seams.append((pl.num(t.name), parallel.seam_paths(field(text, "Seam"))))
+        repo_names.add(rn); branches.add(br)
+    if len(repo_names) != 1 or None in repo_names:
+        print(f"DISPATCH STOP the tickets must share one repo (got {', '.join(map(str, repo_names))})"); return 1
+    if len(branches) != 1 or None in branches:
+        print(f"DISPATCH STOP the tickets must share one Branch (got {', '.join(map(str, branches))})"); return 1
+    rn, br = repo_names.pop(), branches.pop()
+    repo = repos.get(rn)
+    clash = parallel.seam_conflicts(seams)
+    if clash:
+        for x, y, why in clash:
+            print(f"  {x} and {y} overlap: {why}")
+        print("DISPATCH STOP Seams overlap (D3): run those tickets one after another"); return 1
+    if git(repo, "branch", "--show-current") != br:
+        print(f"DISPATCH STOP {rn} is not on {br}"); return 1
+    if dirty(repo):
+        print(f"DISPATCH STOP {rn} has uncommitted changes"); return 1
+    print(f"  group {' '.join(nn for nn, _ in items)} on {rn} {br}, Seams separate")
+    if a.dry_run:
+        print("DISPATCH OK dry run (nothing started)"); return 0
+    for nn, t in items:
+        text, crlf = pl.read(t)
+        if field(text, "Status") != "in-progress":
+            pl.write(t, set_status(text, "in-progress"), crlf)
+    report = parallel.run_group(repo, br, [(nn, t) for nn, t in items], tc["source"], rn, cfg["setup"],
+                                scratch / "runs", extra=a.extra or [], say=print)
+    paused, failed = False, []
+    for nn, line, state, detail in report:
+        print(line)
+        if state == "merged":
+            print(f"  {nn}: merged into {br} -> {detail}")
+            pl.log(scratch, a.feature, f"NOTE parallel {nn} merged {detail}", "merge", ticket=None, repo=rn)
+        elif state == "conflict":
+            print(f"  {nn}: FAIL conflict merging into {br} ({', '.join(detail)}); branch kept, redispatch from the "
+                  "new tip")
+            failed.append(nn)
+        elif state == "empty":
+            print(f"  {nn}: PASS but no commit on its branch; nothing merged")
+            failed.append(nn)
+        else:
+            failed.append(nn)
+            paused = paused or "usage-limit" in line
+            print(f"  {nn}: not merged; branch {detail} kept" if detail else f"  {nn}: not run")
+    sha = commit_scratch(scratch, f"dispatch {' '.join(nn for nn, _ in items)} (parallel)")
+    tail = f"; scratch committed {sha}" if sha else ""
+    if paused:
+        print(f"DISPATCH STOP usage limit hit: pause the queue until the limit resets{tail}"); return 1
+    if failed:
+        print(f"DISPATCH OK with failures: {' '.join(failed)} (fix or redispatch){tail}"); return 0
+    print(f"DISPATCH OK {len(items)} merged into {br}{tail}")
     return 0
 
 
@@ -678,10 +816,13 @@ def main():
     p = sub.add_parser("baseline"); p.add_argument("feature"); p.add_argument("--force", action="store_true")
     p.add_argument("--lines", type=int, default=60); p.add_argument("--timeout", type=int, default=900)
     p = sub.add_parser("check-run"); p.add_argument("phase", choices=["begin", "end"])
+    p = sub.add_parser("dispatch"); p.add_argument("feature"); p.add_argument("tickets", nargs="+")
+    p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--extra", nargs=argparse.REMAINDER, help="passed on to every run-worker.py (e.g. --model sonnet)")
     a = ap.parse_args()
     return {"init": cmd_init, "resume": cmd_resume, "commit": cmd_commit, "decide": cmd_decide, "stop": cmd_stop,
             "switch": cmd_switch, "sync-main": cmd_sync_main, "baseline": cmd_baseline, "status": cmd_status,
-            "check-run": cmd_check_run}[a.cmd](a)
+            "check-run": cmd_check_run, "dispatch": cmd_dispatch}[a.cmd](a)
 
 
 if __name__ == "__main__":

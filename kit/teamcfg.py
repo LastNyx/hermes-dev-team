@@ -11,10 +11,16 @@ Relative paths in a config resolve from the folder the config file sits in.
 Keys: test (a command string, or a list of {name, cmd, cwd} suites run by suites.py), models, protected (as before), docs_edit (repo-relative files the docs worker may also edit), shared (true: other people work in the repo; see orchestrate),
 scratch (folder for tickets, reviews, runs), rules (file or list of files
 pasted into every worker prompt; default: the repo's AGENTS.md and CLAUDE.md, whichever exist, in that order), rules_max_chars (default 40000), path (folders put in
-front of PATH for the worker, e.g. ["~/.local/bin"]).
+front of PATH for the worker, e.g. ["~/.local/bin"]), max_workers (parallel dev workers for `scratch.py dispatch`, default
+1 = serial), setup (list of {cmd, cwd} that install dependencies in a fresh pool worktree; required when max_workers > 1).
 
 Worker lock: while a worker runs, the launcher keeps <scratch>/runs/worker.lock (JSON: launcher pid, worker pid, role,
-ticket, stamp). It keeps one worker at a time and lets scratch.py refuse to switch machines mid-run.
+ticket, stamp). A worker started by `scratch.py dispatch` in pool slot N keeps runs/slot-N.lock instead (0.17.0). A
+serial run refuses while any lock is live; a slot run refuses while worker.lock or its own slot lock is live.
+
+Pool worktrees (0.17.0): `scratch.py dispatch` runs workers in sibling worktrees `<repo>.w1`, `<repo>.w2`, ... and tells
+the launcher where the real config is with HDT_CONFIG (the config file) and HDT_SLOT_OF (the repo's folder name), so a
+slot uses the main checkout's config and scratch folder.
 """
 import json, os, pathlib, subprocess, sys
 
@@ -48,7 +54,13 @@ def load(folder=None):
     d = pathlib.Path(folder or os.getcwd()).resolve()
     own, ws = d / ".team.json", d.parent / ".team.json"
     cfg, base, source, repos = {}, d, None, {}
-    if own.is_file():
+    forced, name = os.environ.get("HDT_CONFIG"), os.environ.get("HDT_SLOT_OF") or d.name
+    if forced:                                        # a pool slot: the main checkout's config (see the module doc)
+        source = pathlib.Path(forced).resolve()
+        w = _read(source)
+        base, repos = source.parent, w.get("repos") or {}
+        cfg = {**{k: v for k, v in w.items() if k != "repos"}, **(repos.get(name) or {})}
+    elif own.is_file():
         cfg, source = _read(own), own
         repos = cfg.get("repos") or {}                # a workspace root: scratch.py runs from here
         if d.name in repos:                           # run from inside a workspace root that is also a repo: unusual
@@ -94,24 +106,40 @@ def pid_alive(pid):
         return True
 
 
-def lock_path(scratch):
-    return pathlib.Path(scratch) / "runs" / "worker.lock"
+def lock_path(scratch, slot=None):
+    return pathlib.Path(scratch) / "runs" / (f"slot-{int(slot)}.lock" if slot else "worker.lock")
 
 
-def read_lock(scratch):
-    """(lock dict or None, alive). alive = the launcher OR the worker named in the lock is still running.
+def read_lock_file(p):
+    """(lock dict or None, alive) for one lock file. alive = the launcher OR the worker named in it still runs.
 
     measured (Linux): a SIGKILLed launcher leaves its worker running (the worker has its own session so `stop` can kill
     its group), and a lock that checked only the launcher let a second dispatch start beside the orphan.
     """
-    p = lock_path(scratch)
+    p = pathlib.Path(p)
     if not p.is_file():
         return None, False
     try:
         d = json.loads(p.read_text(encoding="utf-8"))
     except ValueError:
         return {"raw": p.read_text(encoding="utf-8", errors="replace")}, False
+    d["_path"] = str(p)
     return d, pid_alive(d.get("launcher_pid")) or pid_alive(d.get("worker_pid"))
+
+
+def read_locks(scratch):
+    """[(lock, alive)] for worker.lock and every slot lock (0.17.0)."""
+    runs = pathlib.Path(scratch) / "runs"
+    files = sorted(runs.glob("*.lock")) if runs.is_dir() else []
+    return [x for x in (read_lock_file(f) for f in files) if x[0] is not None]
+
+
+def read_lock(scratch):
+    """(lock dict or None, alive) for "is any worker running": the first live lock of any kind, else a stale one.
+    The dict's `_path` names its file."""
+    locks = read_locks(scratch)
+    live = [x for x in locks if x[1]]
+    return (live or locks or [(None, False)])[0]
 
 
 def kill_tree(pid):

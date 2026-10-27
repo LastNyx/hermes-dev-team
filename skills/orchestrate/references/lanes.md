@@ -47,4 +47,5 @@ With that line in `decisions.md` (and only then):
 - In the final report name every batch closed without a further review round, and every check that only a real run
   can do (`Not checked:` lines, `Cause: UNCONFIRMED`).
 
-"One worker at a time" is never delegated: the lock is what keeps resume and switching safe.
+"One worker at a time" is never delegated: the lock is what keeps resume and switching safe. The one exception is
+`scratch.py dispatch` (SKILL.md step 4b), which runs its own group of slots under its own locks.
