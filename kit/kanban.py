@@ -4,8 +4,8 @@
 Usage (cwd = the project repo root, like scratch.py):
     python <kit>/kanban.py board [--feature F] [--json]   # tickets by Status: todo, in-progress, review, blocked, done
     python <kit>/kanban.py status [--json]                # dispatcher state: running, pid, workers, pause
-    python <kit>/kanban.py run <feature> [--once] [--dry-run] [--interval S]
-                                                          # START side (K2): each tick start ready tickets in pool slots
+    python <kit>/kanban.py run <feature> [--once] [--dry-run] [--interval S] [--grace S] [--drain]
+                                                          # each tick: reap finished workers (K3), start ready tickets (K2)
 
 `run` (docs/open/kanban-dispatcher.md D3/D5/D6): takes runs/dispatcher.lock (refuses when that pid is alive, replaces a
 stale one, removes it on exit, SIGTERM and SIGINT), needs `.team.json` max_workers >= 1 and `setup`, a clean repo on the
@@ -14,7 +14,22 @@ and from each other, same repo and Branch as the running group, free slot, cap m
 slot (parallel.prepare_slot), Status in-progress and a detached `run-worker.py dev --slot N` (stdout in
 runs/kanban-slot-N.out). The scratch repo is committed once per tick that changed a Status. `--once`: one tick, workers
 keep running. `--dry-run`: print `would start NN in slot K`, write nothing. Last line `KANBAN OK started N` or `KANBAN STOP
-<reason>`. Finish handling (merge, review/blocked, retry, pause, timeout, orphans) is K3 and not here yet.
+<reason>`.
+
+FINISH side (K3, D3/D4/D6), every tick before picking: a tracked run (runs/kanban-state.json: slot, runs.log position,
+start time, failures) is FINISHED when its slot lock is gone or dead and a new runs.log line for the ticket exists.
+PASS + a commit on `<Branch>--NN`: merged into the feature branch (parallel.merge_ticket, one merge lock, ticket order),
+`merged NN -> sha`, Status review, `NOTE parallel NN merged <sha>` in runs.log. PASS without a commit: blocked. A merge
+conflict or any other FAIL or crash (no runs.log line, `FAIL no RESULT`, timeout): first one -> Status todo (re-queued,
+branch kept), second -> blocked with `Dispatcher: blocked after 2 failed runs: <RESULT line>` in `## Result`. `FAIL
+usage-limit`: no retry counted, ticket back to todo, runs/dispatcher.pause = the reset epoch (parsed from `resets at
+5pm` / `in N minutes`, else now+30 min), `KANBAN PAUSE until <time>`, nothing starts until then. Timeout: `.team.json`
+`run_seconds` (default 1800), that slot only is stopped with scratch.stop_one, then handled as a crash. Orphan: a stale
+slot lock of an in-progress ticket with no new runs.log line on two ticks in a row -> blocked, never re-run, the stale
+lock removed. A run adopts workers an earlier `--once` left (slot lock with a live pid of an in-progress ticket of the
+feature); any other live lock refuses. SIGTERM/SIGINT: no new starts, wait up to `--grace S` (default 0) for running
+workers, release the lock. `--drain`: no new starts, keep reaping until nothing runs, exit 0. When no todo ticket is left
+and nothing runs: `KANBAN OK done: merged N, review N, blocked N`, exit 0 (not with --once).
 
 Files read (all under the scratch folder; `run` writes dispatcher.lock, K3 writes dispatcher.pause):
     <scratch>/<feature>/issues/NN-*.md      tickets (header lines Status, Branch, Repo, Blocked by, Seam)
@@ -32,7 +47,7 @@ retries = non-PASS runs of the ticket before its last run.
 
 Exit 0, or 1 with one line `KANBAN STOP <reason>` (no .team.json, no scratch folder, no feature).
 """
-import argparse, json, os, pathlib, re, signal, subprocess, sys, time
+import argparse, json, os, pathlib, re, signal, subprocess, sys, threading, time
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import teamcfg  # noqa: E402
@@ -296,8 +311,10 @@ def worker_argv(ticket_path, n):
             "--slot", str(n)]
 
 
-def used_slots(scratch, children):
+def used_slots(scratch, children, fin=None):
     used = {n for n, (_, p, _) in children.items() if p.poll() is None}
+    if fin:
+        used |= {e["slot"] for e in fin.state.values() if e.get("running") and e.get("slot")}
     for d, alive in worker_locks(scratch):
         m = re.search(r"slot-(\d+)\.lock$", str(d.get("_path", "")))
         if alive and m:
@@ -325,6 +342,8 @@ def check_run(a, say=print):
         raise Stop(".team.json has no `setup` (the commands that install dependencies in a fresh worktree)")
     if a.interval <= 0:
         raise Stop("--interval must be a positive number of seconds")
+    if a.grace < 0:
+        raise Stop("--grace must not be negative")
     return tc, scratch, repos, min(mw, HARD_CAP)
 
 
@@ -354,9 +373,279 @@ def check_tree(scratch, feature, repos):
         raise Stop(f"{t['repo']} is not on {t['branch']}")
     return cur
 
+# ------------------------------------------------------------------ run: finish side (K3)
 
-def tick(a, tc, scratch, repos, cap, children, cur, bad, say=print):
-    """One pass: pick, prepare the slot, mark in-progress, start. Returns the list of started ticket numbers."""
+BOOT_GRACE = 30          # seconds a just-started worker may have no lock yet before "no lock, no result" is a crash
+RESET_RE = re.compile(r"resets?\s+(?:at\s+)?(\d{1,2})(?::(\d\d))?\s*([ap]m)?", re.I)
+IN_RE = re.compile(r"\bin\s+(\d+)\s*(minute|min|hour|hr)s?\b", re.I)
+
+
+def parse_reset(text, now):
+    """Epoch a usage limit resets, from 'resets at 5pm' / 'resets 17:30' / 'in 20 minutes'; now + 30 min otherwise."""
+    m = IN_RE.search(text or "")
+    if m:
+        return now + int(m.group(1)) * (3600 if m.group(2).lower().startswith("h") else 60)
+    m = RESET_RE.search(text or "")
+    if m:
+        h, mi, ap = int(m.group(1)), int(m.group(2) or 0), (m.group(3) or "").lower()
+        if ap == "pm" and h < 12:
+            h += 12
+        if ap == "am" and h == 12:
+            h = 0
+        if h < 24 and mi < 60:
+            t = time.localtime(now)
+            e = time.mktime((t.tm_year, t.tm_mon, t.tm_mday, h, mi, 0, 0, 0, -1))
+            return e if e > now else e + 86400
+    return now + 1800
+
+
+def stamp_epoch(stamp):
+    try:
+        return time.mktime(time.strptime(stamp, "%Y%m%d-%H%M%S"))
+    except (ValueError, TypeError):
+        return None
+
+
+class Finisher:
+    """Reaps the workers of one feature (docs/open/kanban-dispatcher.md D3, D4, D6). State per running ticket lives in
+    runs/kanban-state.json so a later `run` adopts what an earlier one started."""
+
+    def __init__(self, a, tc, scratch, repos, children, say=print):
+        self.a, self.tc, self.scratch, self.repos, self.children, self.say = a, tc, scratch, repos, children, say
+        self.fd = scratch / a.feature
+        self.merge_lock = threading.Lock()
+        self.path = scratch / "runs" / "kanban-state.json"
+        d = {}
+        try:
+            d = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            pass
+        d = d if isinstance(d, dict) else {}
+        self.state = d.get("running") if isinstance(d.get("running"), dict) else {}
+        self.extra = d.get("extra") if isinstance(d.get("extra"), dict) else {}
+        try:
+            self.run_seconds = float(tc["cfg"].get("run_seconds") or 1800)
+        except (TypeError, ValueError):
+            self.run_seconds = 1800.0
+        self.merged, self.notes, self.waiting = 0, [], set()
+
+    # -- bookkeeping
+    def save(self):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_text(json.dumps({"running": self.state, "extra": self.extra}), encoding="utf-8")
+
+    @staticmethod
+    def mine(runs, name):
+        return [f for f in runs if len(f) > 6 and f[1] != "planner" and f"ticket={name}" in f[6:]]
+
+    def track(self, name, slot, base, outoff):
+        self.state[name] = {"slot": slot, "base": base, "stamp": None, "started": time.time(), "out": outoff,
+                            "orphan": 0}
+        self.save()
+
+    def new_lines(self, e, runs, name):
+        lines = self.mine(runs, name)
+        if e.get("base") is not None:
+            return lines[e["base"]:]
+        return [f for f in lines if f[0] == e.get("stamp")] if e.get("stamp") else []
+
+    def lock_of(self, name, locks):
+        return next(((d, al) for d, al in locks if pathlib.PurePath(str(d.get("ticket") or "")).name == name), (None, False))
+
+    def ticket(self, name):
+        p = self.fd / "issues" / name
+        return p if p.is_file() else None
+
+    # -- ticket edits
+    def set(self, name, status, note=None):
+        p = self.ticket(name)
+        if not p:
+            return
+        text, crlf = sc.pl.read(p)
+        new = sc.set_status(text, status)
+        if new is not None:
+            text = new
+        if note:
+            text = sc.pl.append(text, note)
+        sc.pl.write(p, text, crlf)
+
+    def finish_entry(self, name, status, note=None):
+        self.set(name, status, note)
+        e = self.state.pop(name, None)
+        if e and e.get("slot") in self.children:
+            self.children.pop(e["slot"], None)
+        self.save()
+        self.notes.append(f"{name.split('-')[0]} {status}")
+
+    # -- decisions
+    def failure(self, name, runs, line, reason, logged):
+        nn = sc.pl.num(name)
+        fails = sum(1 for f in self.mine(runs, name) if not f[3].startswith("PASS") and "usage-limit" not in f[3])
+        if not logged:
+            self.extra[name] = self.extra.get(name, 0) + 1
+        total = fails + self.extra.get(name, 0)
+        last = line or f"RESULT dev FAIL {reason}"
+        if total >= 2:
+            self.say(f"blocked {nn}: {reason} (failed {total} times)")
+            self.finish_entry(name, "blocked", f"Dispatcher: blocked after 2 failed runs: {last}")
+        else:
+            self.say(f"requeued {nn}: {reason} (failure {total} of 2; branch kept)")
+            self.finish_entry(name, "todo", f"Dispatcher: run failed ({reason}); re-queued once: {last}")
+
+    def usage_limit(self, name, f, ent):
+        text = " ".join(f)
+        for fld in f:
+            if fld.endswith(".json") or "/" in fld:
+                for cand in (pathlib.Path(fld), self.scratch.parent / fld):
+                    try:
+                        text += " " + str(json.loads(cand.read_text(encoding="utf-8")).get("result") or "")
+                        break
+                    except (OSError, ValueError, AttributeError):
+                        continue
+        out = self.scratch / "runs" / f"kanban-slot-{ent.get('slot')}.out"
+        try:
+            with open(out, "rb") as fh:
+                fh.seek(ent.get("out") or 0)
+                text += " " + fh.read().decode("utf-8", "replace")
+        except OSError:
+            pass
+        until = parse_reset(text, time.time())
+        pp = self.scratch / "runs" / "dispatcher.pause"
+        pp.parent.mkdir(parents=True, exist_ok=True)
+        pp.write_text(str(int(until)), encoding="utf-8")
+        self.say(f"KANBAN PAUSE until {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(until))}")
+        self.say(f"requeued {sc.pl.num(name)}: usage limit (no retry counted)")
+        self.finish_entry(name, "todo")
+
+    def merge(self, name, ent, f, runs):
+        """True when the ticket is settled, False when it must wait for a clean feature tree."""
+        text, _ = sc.pl.read(self.ticket(name))
+        rn = tk.field(text, "Repo")
+        if not rn or rn.startswith("<"):
+            rn = next(iter(self.repos)) if len(self.repos) == 1 else rn
+        br, nn = tk.field(text, "Branch"), sc.pl.num(name)
+        if not ent.get("slot"):                                  # a serial `run-worker.py dev` worked on the branch itself
+            self.say(f"reviewed {nn}: serial worker, nothing to merge")
+            self.finish_entry(name, "review")
+            return True
+        repo = self.repos[rn]
+        if sc.git(repo, "branch", "--show-current") != br or sc.dirty(repo):
+            if name not in self.waiting:
+                self.say(f"  {nn}: finished, but {rn} is not clean on {br}; merge waits")
+            self.waiting.add(name)
+            return False
+        self.waiting.discard(name)
+        tb = parallel.ticket_branch(br, nn)
+        slot = parallel.slot_path(repo, ent["slot"]) if ent.get("slot") else None
+        if slot and slot.exists():
+            sc.git(slot, "checkout", "-q", "--detach")           # free the ticket branch for the merge and `branch -d`
+        with self.merge_lock:
+            state, detail = parallel.merge_ticket(repo, br, tb, name)
+        if state == "merged":
+            self.merged += 1
+            self.say(f"merged {nn} -> {detail}")
+            sc.pl.log(self.scratch, self.a.feature, f"NOTE parallel {nn} merged {detail}", "merge", ticket=None,
+                      repo=rn)
+            self.finish_entry(name, "review", f"Dispatcher: merged {tb} into {br} -> {detail}")
+        elif state == "conflict":
+            self.say(f"  {nn}: FAIL conflict merging into {br} ({', '.join(detail)}); branch {tb} kept")
+            self.failure(name, runs, f"RESULT dev FAIL conflict merging {tb} into {br}", "merge conflict", False)
+        else:
+            self.say(f"  {nn}: PASS but no commit on {tb}; nothing merged")
+            self.finish_entry(name, "blocked", "Dispatcher: PASS but no commit")
+        return True
+
+    def stop_slot(self, lock):
+        sc.stop_one(lock)
+        end = time.time() + 15
+        while time.time() < end and teamcfg.read_lock_file(lock["_path"])[1]:
+            time.sleep(0.3)
+
+    # -- one pass
+    def reap(self):
+        """Decide the state of every running ticket of the feature. Sets self.notes when a Status changed."""
+        self.notes = []
+        cols = collect(self.scratch, [self.a.feature])
+        inprog = {t["name"] for t in cols["in-progress"]}
+        for name in list(self.state):
+            if name not in inprog:
+                self.state.pop(name)                        # the planner moved it: not ours any more
+        runs, locks, now = read_runs(self.scratch), worker_locks(self.scratch), time.time()
+        for name in sorted(inprog):
+            if name not in self.state:                      # adopted: in-progress with nothing tracking it
+                d, _ = self.lock_of(name, locks)
+                m = re.search(r"slot-(\d+)\.lock$", str((d or {}).get("_path", "")))
+                self.state[name] = {"slot": int(m.group(1)) if m else None, "base": None if d else len(self.mine(runs, name)),
+                                    "stamp": (d or {}).get("stamp"), "started": stamp_epoch((d or {}).get("stamp")) or now,
+                                    "out": None, "orphan": 0}
+        for name in sorted(self.state, key=lambda n: ticket_key({"number": sc.pl.num(n)})):
+            if not self.ticket(name):
+                self.state.pop(name); continue
+            e = self.state[name]
+            d, alive = self.lock_of(name, locks)
+            if d:
+                e["stamp"] = d.get("stamp") or e.get("stamp")
+                m = re.search(r"slot-(\d+)\.lock$", str(d.get("_path", "")))
+                if m and not e.get("slot"):
+                    e["slot"] = int(m.group(1))
+            proc = self.children.get(e.get("slot"))
+            proc_alive = bool(proc and proc[1].poll() is None and proc[0]["name"] == name)
+            new = self.new_lines(e, runs, name)
+            if alive or proc_alive:
+                if now - e["started"] > self.run_seconds and d and alive:
+                    self.say(f"  {sc.pl.num(name)}: timed out after {int(now - e['started'])}s; stopping slot {e.get('slot')}")
+                    self.stop_slot(d)
+                    runs = read_runs(self.scratch)
+                    new = self.new_lines(e, runs, name)
+                    self.failure(name, runs, f"RESULT dev {new[-1][3]}" if new else None, "timed out", bool(new)
+                                 and not new[-1][3].startswith("PASS"))
+                continue
+            if new:
+                if d and not alive:
+                    pathlib.Path(d["_path"]).unlink(missing_ok=True)
+                f = new[-1]
+                word = parallel.verdict_word(f"RESULT {f[1]} {f[3]}")
+                if word == "PASS":
+                    if not self.merge(name, e, f, runs):
+                        continue
+                elif "usage-limit" in f[3]:
+                    self.usage_limit(name, f, e)
+                else:
+                    self.failure(name, runs, f"RESULT {f[1]} {f[3]}", "FAIL", True)
+                continue
+            if d:                                                   # dead lock, no result
+                e["orphan"] = e.get("orphan", 0) + 1
+                if e["orphan"] >= 2:
+                    pathlib.Path(d["_path"]).unlink(missing_ok=True)   # stale per teamcfg (launcher and worker gone)
+                    self.say(f"blocked {sc.pl.num(name)}: orphaned (no live worker, no result)")
+                    self.finish_entry(name, "blocked", "Dispatcher: orphaned (no live worker, no result)")
+                continue
+            if proc or now - e["started"] > BOOT_GRACE:             # no lock, no result: the worker is gone
+                out = self.scratch / "runs" / f"kanban-slot-{e.get('slot')}.out"
+                last = next((l for l in reversed(tail(out, 40)) if l.startswith("RESULT ")), None)
+                self.failure(name, runs, last or "RESULT dev FAIL no RESULT (worker gone, no runs.log line)",
+                             "worker gone, no result", False)
+        self.save()
+
+    def running(self):
+        return sorted(self.state)
+
+    def counts(self):
+        cols = collect(self.scratch, [self.a.feature])
+        return len(cols["review"]), len(cols["blocked"])
+
+
+def tick(a, tc, scratch, repos, cap, children, cur, bad, say=print, fin=None, start=True):
+    """One pass: reap finished workers (K3, when `fin`), then pick, prepare the slot, mark in-progress, start.
+    Returns the list of started ticket numbers."""
+    if fin:
+        fin.reap()
+    if not start:
+        if fin and fin.notes:
+            sha = sc.commit_scratch(scratch, f"finish {' '.join(fin.notes)} (kanban)")
+            if sha:
+                say(f"  scratch committed {sha}")
+        return []
     fd = scratch / a.feature
     tickets = [t for t in open_tickets(scratch, a.feature, repos) if t["branch"] == cur.get(t["repo"])]
     running = [t for t in tickets if t["status"] == "in-progress"]
@@ -368,7 +657,7 @@ def tick(a, tc, scratch, repos, cap, children, cur, bad, say=print):
     except (OSError, ValueError):
         pass
     picks = pick_ready(todo, running, cap, paused, time.time())
-    used, started, changed = used_slots(scratch, children), [], False
+    used, started, changed = used_slots(scratch, children, fin), [], False
     for t in picks:
         free = [n for n in range(1, cap + 1) if n not in used]
         if not free:
@@ -395,6 +684,9 @@ def tick(a, tc, scratch, repos, cap, children, cur, bad, say=print):
             bad.add(t["name"])
             continue
         sc.pl.write(path, new, crlf)
+        runs_before = len(fin.mine(read_runs(scratch), t["name"])) if fin else 0
+        out_file = scratch / "runs" / f"kanban-slot-{n}.out"
+        out_off = out_file.stat().st_size if out_file.is_file() else 0
         env = {**os.environ, "HDT_CONFIG": str(tc["source"]), "HDT_SLOT_OF": t["repo"], "PYTHONUNBUFFERED": "1"}
         try:
             out = open(scratch / "runs" / f"kanban-slot-{n}.out", "ab")
@@ -407,15 +699,35 @@ def tick(a, tc, scratch, repos, cap, children, cur, bad, say=print):
             bad.add(t["name"])
             continue
         children[n] = (t, proc, time.time())
+        if fin:
+            fin.track(t["name"], n, runs_before, out_off)
         changed = True
         started.append(t["number"])
         say(f"started {t['number']} in slot {n} ({parallel.ticket_branch(br, t['number'])} @ {base[:8]}, pid {proc.pid})"
             + (f" [{note}]" if note else ""))
-    if changed:
-        sha = sc.commit_scratch(scratch, f"dispatch {' '.join(started)} (kanban)")
+    if changed or (fin and fin.notes):
+        parts = ([f"finish {' '.join(fin.notes)}"] if fin and fin.notes else []) + \
+                ([f"dispatch {' '.join(started)}"] if started else [])
+        sha = sc.commit_scratch(scratch, f"{'; '.join(parts)} (kanban)")
         if sha:
             say(f"  scratch committed {sha}")
     return started
+
+
+def adoptable(scratch, feature, repos):
+    """Refusal text for the first live worker lock this dispatcher cannot adopt, else None. Adoptable: a slot lock (or a
+    worker.lock of role dev) whose ticket is an in-progress ticket of this feature."""
+    mine = {t["name"] for t in collect(scratch, [feature])["in-progress"]}
+    for d, alive in worker_locks(scratch):
+        if not alive:
+            continue
+        name = pathlib.PurePath(str(d.get("ticket") or "")).name
+        is_slot = re.search(r"slot-\d+\.lock$", str(d.get("_path", ""))) is not None
+        in_feature = (scratch / feature / "issues" / name).is_file() if name else False
+        if in_feature and name in mine and (is_slot or d.get("role") == "dev"):
+            continue
+        return f"a worker is running ({d.get('role')} {d.get('ticket') or '-'}); it is not one of this feature's"
+    return None
 
 
 def cmd_run(a):
@@ -424,10 +736,9 @@ def cmd_run(a):
     st = dispatcher_status(tc, scratch)
     if st["running"] and not a.dry_run:
         raise Stop(f"a dispatcher is already running (pid {st['pid']})")
-    live = [d for d, al in worker_locks(scratch) if al]
-    if live:
-        raise Stop(f"a worker is running ({live[0].get('role')} {live[0].get('ticket') or '-'}); "
-                   "it is not one of this dispatcher's")
+    why = adoptable(scratch, a.feature, repos)
+    if why:
+        raise Stop(why)
     children, bad, started, stop = {}, set(), 0, []
     if a.dry_run:
         n = len(tick(a, tc, scratch, repos, cap, children, cur, bad))
@@ -437,16 +748,33 @@ def cmd_run(a):
     if other is not None:
         raise Stop(f"a dispatcher is already running (pid {other})" if other > 0 else "cannot take the dispatcher lock")
     old = {s: signal.signal(s, lambda *_: stop.append(1)) for s in (signal.SIGTERM, signal.SIGINT)}
+    fin = Finisher(a, tc, scratch, repos, children)
+    label = "drained" if a.drain else "done"
+
+    def nap(secs):
+        deadline = time.time() + secs
+        while time.time() < deadline and not stop:
+            time.sleep(0.2)
+
     try:
         while True:
-            started += len(tick(a, tc, scratch, repos, cap, children, cur, bad))
+            started += len(tick(a, tc, scratch, repos, cap, children, cur, bad, fin=fin,
+                                start=not a.drain and not stop))
             if a.once or stop:
                 break
-            deadline = time.time() + a.interval
-            while time.time() < deadline and not stop:
-                time.sleep(0.2)
+            todo = [t for t in collect(scratch, [a.feature])["todo"] if t["name"] not in bad]
+            if not fin.running() and (a.drain or not todo):
+                rv, bl = fin.counts()
+                print(f"KANBAN OK {label}: merged {fin.merged}, review {rv}, blocked {bl}")
+                return 0
+            nap(a.interval)
             if stop:
                 break
+        if stop and a.grace > 0:
+            end = time.time() + a.grace
+            while fin.running() and time.time() < end:
+                tick(a, tc, scratch, repos, cap, children, cur, bad, fin=fin, start=False)
+                time.sleep(0.5)
     finally:
         for s, h in old.items():
             signal.signal(s, h)
@@ -462,6 +790,7 @@ def main():
     p = sub.add_parser("status"); p.add_argument("--json", action="store_true")
     p = sub.add_parser("run"); p.add_argument("feature"); p.add_argument("--once", action="store_true")
     p.add_argument("--dry-run", action="store_true"); p.add_argument("--interval", type=float, default=10)
+    p.add_argument("--grace", type=float, default=0); p.add_argument("--drain", action="store_true")
     a = ap.parse_args()
     try:
         return {"board": cmd_board, "status": cmd_status, "run": cmd_run}[a.cmd](a)

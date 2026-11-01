@@ -221,8 +221,13 @@ def main():
           and sh(repo, "status", "--porcelain") == "")
     check("slots are sibling worktrees on ticket branches",
           sh(ROOT / "app.w1", "branch", "--show-current") == "feat--01" and sh(ROOT / "app.w2", "branch", "--show-current") == "feat--02")
+    other = scratch / "runs/slot-3.lock"
+    other.write_text(json.dumps({"launcher_pid": os.getpid(), "role": "dev", "ticket": "elsewhere/9-x.md", "stamp": "x"}))
     rc, o = run(repo, "--once")
-    check("a run while workers of an earlier run are live is refused (not ours)", rc == 1 and "KANBAN STOP" in o, o)
+    check("a live worker lock of a ticket outside the feature is refused (not ours)", rc == 1 and "KANBAN STOP" in o, o)
+    other.unlink()
+    rc, o = run(repo, "--once")
+    check("workers left by an earlier --once are adopted, not refused (K3)", rc == 0 and "KANBAN OK" in o, o)
     pids = [d.get("worker_pid") or d.get("launcher_pid") for d, _ in kanban.worker_locks(scratch)]
     stop_workers(repo); wait_gone(pids)
     time.sleep(1)
