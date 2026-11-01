@@ -158,3 +158,38 @@ def kill_tree(pid):
         except OSError:
             return False
     return True
+
+
+def proc_cmdline(pid):
+    """Command line of a process as one string, or None when it cannot be read (then nothing is signalled)."""
+    try:
+        return pathlib.Path(f"/proc/{int(pid)}/cmdline").read_bytes().replace(b"\0", b" ").decode("utf-8", "replace")
+    except (OSError, ValueError):
+        pass
+    if sys.platform == "win32":
+        return None
+    try:
+        r = subprocess.run(["ps", "-p", str(int(pid)), "-o", "args="], capture_output=True, text=True, timeout=10)
+        return r.stdout.strip() or None
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
+def read_dispatcher(scratch):
+    """runs/dispatcher.lock as a dict (pid, started, feature), or None."""
+    try:
+        d = json.loads((pathlib.Path(scratch) / "runs" / "dispatcher.lock").read_text(encoding="utf-8"))
+        return d if isinstance(d, dict) else None
+    except (OSError, ValueError):
+        return None
+
+
+def dispatcher_alive(scratch):
+    """The lock dict of a running kanban dispatcher, else None. Alive = runs/dispatcher.lock names a live pid (not this
+    process) whose command line contains `kanban.py`; a dead pid or a foreign process is a stale lock."""
+    d = read_dispatcher(scratch)
+    pid = d.get("pid") if d else None
+    if not pid_alive(pid) or int(pid) == os.getpid() or "kanban.py" not in (proc_cmdline(pid) or ""):
+        return None
+    return d
+

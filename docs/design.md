@@ -129,3 +129,13 @@ the watcher's parser in the kit was rejected (goes stale).
 - **`kit/costs.py`:** list price is not subscription billing; the watcher shows `list$`.
 - **`claude-p-role-workers` as a skill:** vendor-specific; now `docs/backend-claude.md`.
 - **Sandbox/container mode:** considered, skipped.
+
+## Kanban dispatcher
+
+| Rule | Why |
+|---|---|
+| `kit/kanban.py` reads the ticket files as the source of truth: no database, no second state beyond `runs/dispatcher.lock`, `dispatcher.pause` and `kanban-state.json` (a cache a restart can rebuild from tickets, locks and `runs.log`) | The planner, `scratch.py` and git already read and write the tickets; a second store would drift. |
+| It reuses `kit/parallel.py` (`prepare_slot`, `merge_ticket`, `seam_conflicts`) and starts workers only through `run-worker.py` | Protected files, no push and git-state guards run unchanged; the dispatcher adds none and bypasses none. |
+| `stop` signals only a pid whose command line contains `kanban.py`; `--now` also stops workers with `scratch.stop_one` and returns their tickets to `todo` | A stale lock must never get an unrelated process killed; with the dispatcher gone nobody else would move the ticket. |
+| Opt-in; one feature at a time; shares the worker locks with `scratch.py dispatch`, so the two refuse each other | Two writers of Status would race. |
+| `scratch.py dispatch` and `kanban.py run` share one blocker rule (`tickets.open_blockers`, `review` counts as done), one preflight (`kit/preflight.py`) and one dispatcher-alive check (`teamcfg.dispatcher_alive`); `resume` and `dispatch` stand aside while a dispatcher lives | Two commands with their own copies drifted (review blockers); `resume` would remove the live locks and merge branches under a running dispatcher. |

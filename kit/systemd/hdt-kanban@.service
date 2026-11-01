@@ -1,0 +1,25 @@
+# hermes-dev-team kanban dispatcher, one project and feature per instance (user unit).
+#
+# UNVERIFIED: `systemd-analyze verify` fails on this template ("Failed to setup working directory"). The supported start is
+# `python <kit>/kanban.py service <feature>` (a `systemd-run --user` line); use this file only if you will debug it yourself.
+#
+# Prefer `python <kit>/kanban.py service <feature>`: it prints a ready `systemd-run --user` line for the project you are in.
+# To use this template instead:
+#   1. copy it to ~/.config/systemd/user/hdt-kanban@.service
+#   2. instance name = the project path escaped: systemd-escape --path /path/to/project
+#   3. `systemctl --user edit hdt-kanban@<escaped>.service` and set the three Environment lines below
+#   4. `systemctl --user start hdt-kanban@<escaped>.service`; stop it with `kanban.py stop`, not `systemctl kill`
+# `%i` alone cannot name the feature or the kit folder, so the three values come from Environment (placeholders here).
+[Unit]
+Description=hermes-dev-team kanban dispatcher (%i)
+
+[Service]
+Type=simple
+Environment=HDT_PROJECT=/path/to/project
+Environment=HDT_KIT=/path/to/hermes-dev-team/kit
+Environment=HDT_FEATURE=feature-name
+ExecStart=/bin/sh -c 'cd "$HDT_PROJECT" && exec python3 "$HDT_KIT/kanban.py" run "$HDT_FEATURE"'
+Restart=no
+# SIGTERM goes to the dispatcher only: running workers are detached and survive a stop (the next run adopts them).
+KillMode=process
+TimeoutStopSec=90

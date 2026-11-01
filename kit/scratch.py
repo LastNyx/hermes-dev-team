@@ -32,6 +32,8 @@ import argparse, datetime, json, os, pathlib, re, subprocess, sys, time
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import teamcfg  # noqa: E402
 import plannerlog as pl  # noqa: E402
+import tickets as tk  # noqa: E402
+import preflight  # noqa: E402
 import suites  # noqa: E402
 import parallel  # noqa: E402
 
@@ -111,9 +113,7 @@ def sync(cwd, branch, label):
     return True, f"{label}: up to date" + (f" ({ahead} local commit(s) not pushed)" if ahead else "")
 
 
-def field(text, key):
-    m = re.search(rf"^{re.escape(key)}:[ \t]*(.*?)[ \t]*$", text, re.M)
-    return m.group(1).split("  #")[0].strip().strip("`").strip() if m else None
+field = tk.field                                            # one header-line parser (tickets.py)
 
 
 def tickets(feature_dir):
@@ -525,6 +525,12 @@ def cmd_resume(a):
     if not scratch.is_dir():
         print(f"RESUME STOP no scratch folder {scratch.as_posix()} (other machine: `scratch.py init --clone URL`)")
         return 1
+    disp = teamcfg.dispatcher_alive(scratch)
+    if disp:       # a live `kanban.py run` owns the locks, ticket branches, Statuses and the checkout: touch nothing
+        print(f"RESUME OK dispatcher running (pid {disp.get('pid')}, feature {disp.get('feature')}); "
+              "`kanban.py status` shows it, `kanban.py stop` ends it"); return 0
+    if teamcfg.read_dispatcher(scratch):
+        msgs.append("runs/dispatcher.lock is stale (no live kanban dispatcher); left in place, `kanban.py run` replaces it")
     lock, alive = teamcfg.read_lock(scratch)
     if alive:
         if not teamcfg.pid_alive(lock.get("launcher_pid")):
@@ -534,6 +540,8 @@ def cmd_resume(a):
         print(f"RESUME OK worker running: {lock.get('role')} {lock.get('ticket') or '-'} since {lock.get('stamp')}; "
               "wait for its exit notice"); return 0
     for lk, _ in teamcfg.read_locks(scratch):                  # all stale here (a live one returned above)
+        if pathlib.PurePath(lk.get("_path", "")).name == "dispatcher.lock":
+            continue                                           # not a worker lock (the stale note above covers it)
         msgs.append(f"stale worker lock from {lk.get('stamp')} ({lk.get('role')} {lk.get('ticket')}): the "
                     "launcher died; removed")
         pathlib.Path(lk["_path"]).unlink(missing_ok=True)
@@ -667,19 +675,23 @@ def cmd_dispatch(a):
     fd = feature_dir(scratch, a.feature, "DISPATCH")
     if not fd:
         return 1
-    max_w = int(cfg.get("max_workers") or 1)
+    disp = teamcfg.dispatcher_alive(scratch)
+    if disp:
+        print(f"DISPATCH STOP a kanban dispatcher is running (pid {disp.get('pid')})"); return 1
+    max_w = preflight.max_workers(cfg) or 1
     if len(a.tickets) < 2:
         print("DISPATCH STOP give at least two tickets (one ticket: the usual run-worker.py dev)"); return 1
     if len(a.tickets) > max_w:
         print(f"DISPATCH STOP {len(a.tickets)} tickets but .team.json max_workers is {max_w}"); return 1
-    if not cfg.get("setup"):
+    if not preflight.has_setup(cfg):
         print("DISPATCH STOP .team.json has no `setup` (the commands that install dependencies in a fresh worktree)")
         return 1
-    if tc["source"] is None:
+    if not preflight.has_config(tc):
         print("DISPATCH STOP no .team.json found"); return 1
     held, alive = teamcfg.read_lock(scratch)
     if alive:
         print(f"DISPATCH STOP a worker is running ({held.get('role')} {held.get('ticket') or '-'})"); return 1
+    fd_tickets = tickets(fd)
     items, seams, repo_names, branches = [], [], set(), set()
     group = {nn.split("-")[0] for nn in a.tickets}
     for nn in a.tickets:
@@ -691,9 +703,13 @@ def cmd_dispatch(a):
         if st not in ("todo", "in-progress"):
             print(f"DISPATCH STOP {t.name} is {st} (only todo or in-progress tickets run)"); return 1
         if field(text, "Blocked by") not in (None, "None", "none", "-"):
-            blockers = re.findall(r"\d+[a-z]?", field(text, "Blocked by") or "")
-            open_b = [b for b in blockers if any(pl.num(x["name"]) == b and x["status"] != "done" for x in tickets(fd))]
-            inside = [b for b in blockers if b in group]
+            # same rule as kanban.collect: `review` counts as done, because dispatch merges every PASS ticket into the
+            # feature branch before it returns (the planner sets review afterwards), so a ticket in review is merged
+            by_num = {}
+            for x in fd_tickets:
+                by_num.setdefault(tk.number(x["path"]), []).append((x["path"], {"Status": x["status"]}))
+            open_b = tk.open_blockers(field(text, "Blocked by"), t, by_num, ("done", "review"))
+            inside = [b for b in tk.blocker_tokens(field(text, "Blocked by")) if b in group]
             if open_b or inside:
                 print(f"DISPATCH STOP {t.name} is blocked by {', '.join(open_b or inside)}"); return 1
         items.append((pl.num(t.name), t)); seams.append((pl.num(t.name), parallel.seam_paths(field(text, "Seam"))))
@@ -709,9 +725,9 @@ def cmd_dispatch(a):
         for x, y, why in clash:
             print(f"  {x} and {y} overlap: {why}")
         print("DISPATCH STOP Seams overlap (D3): run those tickets one after another"); return 1
-    if git(repo, "branch", "--show-current") != br:
+    if not preflight.on_branch(git(repo, "branch", "--show-current"), br):
         print(f"DISPATCH STOP {rn} is not on {br}"); return 1
-    if dirty(repo):
+    if not preflight.clean(dirty(repo)):
         print(f"DISPATCH STOP {rn} has uncommitted changes"); return 1
     print(f"  group {' '.join(nn for nn, _ in items)} on {rn} {br}, Seams separate")
     if a.dry_run:

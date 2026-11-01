@@ -56,13 +56,18 @@ def is_fix(path):
     return "-fix-" in path.name
 
 
-def blockers(value):
+def blocker_tokens(value):
+    """The ids of a `Blocked by` value as written ('02b', '04'); [] for empty or `None...`."""
     if not value or value.lower().startswith("none"):
         return []
-    return [ticket_id(b) for b in re.findall(r"\b\d+[a-z]?\b", value, re.I)]
+    return re.findall(r"\b\d+[a-z]?\b", value, re.I)
 
 
-def blocker_done(b, waiting, groups):
+def blockers(value):
+    return [ticket_id(b) for b in blocker_tokens(value)]
+
+
+def blocker_done(b, waiting, groups, done_states=("done",)):
     """Blocker id b is done when its main ticket(s) are done and, for a ticket with another id, its fix tickets too.
 
     A fix ticket blocked by its own id waits only for the main ticket (else two fixes of one ticket would wait on
@@ -72,7 +77,16 @@ def blocker_done(b, waiting, groups):
         return False
     same = number(waiting) == b
     need = [(t, f) for t, f in group if t != waiting and not (same and is_fix(t))]
-    return all(f.get("Status") == "done" for _, f in need)
+    return all(f.get("Status") in done_states for _, f in need)
+
+
+def open_blockers(value, waiting, by_num, done_states=("done",)):
+    """THE blocker rule (kanban.collect and scratch.py dispatch both call it): the ids in the `Blocked by` value that
+    are NOT done, as written in the value. `waiting` is the waiting ticket's path, `by_num` maps ticket_id -> [(path,
+    {"Status": ...})] for every ticket of the feature (see blocker_done for lettered and fix tickets). A blocker is done
+    when its Status is in `done_states`; both commands pass ("done", "review") because a ticket in review is already
+    merged into the feature branch. An id with no ticket file is open."""
+    return [b for b in blocker_tokens(value) if not blocker_done(ticket_id(b), waiting, by_num, done_states)]
 
 
 DELETE_RE = re.compile(r"\b(delet(e|es|ing)|git rm|rm -\w+|remove (the |this |that )?(file|folder|directory)s?)\b"
