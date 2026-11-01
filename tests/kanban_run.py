@@ -256,8 +256,8 @@ def main():
     for nn in ("01", "02", "03", "04", "05", "06"):
         (scratch / f"feat/issues/{nn}-t.md").unlink()
     sh(scratch, "add", "-A"); sh(scratch, "commit", "-q", "-m", "clear")
-    ticket(repo, "07", "`src/g.py`", blocked="99")           # nothing ready: the loop idles
-    ticket(repo, "99", "`src/h.py`", status="review")
+    ticket(repo, "07", "`src/g.py`")           # ready but paused: the loop idles
+    (scratch / "runs").mkdir(exist_ok=True); (scratch / "runs/dispatcher.pause").write_text(str(time.time() + 3600))
     sh(scratch, "add", "-A"); sh(scratch, "commit", "-q", "-m", "idle")
     p = subprocess.Popen([sys.executable, str(KIT / "kanban.py"), "run", "feat", "--interval", "1"], cwd=repo,
                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)

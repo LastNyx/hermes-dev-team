@@ -1,5 +1,8 @@
 # hermes-dev-team kanban dispatcher, one project and feature per instance (user unit).
 #
+# UNVERIFIED: `systemd-analyze verify` fails on this template ("Failed to setup working directory"). The supported start is
+# `python <kit>/kanban.py service <feature>` (a `systemd-run --user` line); use this file only if you will debug it yourself.
+#
 # Prefer `python <kit>/kanban.py service <feature>`: it prints a ready `systemd-run --user` line for the project you are in.
 # To use this template instead:
 #   1. copy it to ~/.config/systemd/user/hdt-kanban@.service

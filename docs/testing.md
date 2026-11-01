@@ -22,6 +22,7 @@ with local bare repos as remotes, so nothing touches a real project or GitHub, a
 | `python tests/permission_paths.py [--real]` | every `./` and `**/` permission rule the launcher hands a Claude worker is absolute, the reviewer's full-suite command is `kit/suites.py --feature <f>`, the shell is kept in the repo between calls. `--real`: after an allowed `cd sub && ls`, a scratch edit works and both package.json edits are denied | none (`--real`: 1 `claude -p` call, Haiku, about $0.02) | seconds (`--real` about 20 s) | 7 (10) |
 | `python tests/parallel_dispatch.py [--keep]` | `scratch.py dispatch`: Seam overlap, blockers, `max_workers` and `setup` refused; two fake dev runs at once in two slots, merged in order, branches deleted, setup once per slot; a merge conflict kept; a usage limit stops the queue; a mid-group crash: orphan found, `stop`, `resume` merges the finished branch | none (fake `claude`) | ~1 min | 24 |
 | `python tests/parallel_real.py [--keep]` | `dispatch` with two REAL dev workers on two independent tickets: both PASS at the same time, merged, both tests green on the feature branch | 2 short Sonnet dev runs | ~30 s | 5 |
+| `python tests/kanban_real.py [--keep]` | `kanban.py run --interval 2` with REAL dev workers: tickets 01 and 02 (separate Seams) at the same time, 03 `Blocked by: 01` only after 01 is merged; all `review`, three commits and three green tests on the feature branch, lock and worktrees clean, `board --json`, guards ran (`fmt=1`), no push | 3 short Sonnet dev runs (~$0.2 list each) | ~1 min | 14 |
 | `python tests/check_run.py` | `scratch.py check-run`: a clean fix passes; a push, a package.json edit, a dirty tree, a ticket-like subject and a commit on main each FAIL; `begin` refuses main, a dirty tree, and `end` without `begin` | none | seconds | 9 |
 | `python tests/suite_runner.py` | `kit/suites.py` and `scratch.py baseline` with two suites (one in a subfolder): every suite runs after the first fails, failing names from unittest/pytest/vitest/jest samples, baseline failures not counted, a new one named, a nameless failure counts as new, the old string `test` still works | none | seconds | 15 |
 | `python tests/backend_smoke.py [claude] [hermes]` | one trivial dev ticket through the real launcher on each backend that is set up (others SKIP with the reason): RESULT PASS, one commit ending `(01-double.md)`, the test passes, main unmoved, `backend=<name>` in runs.log. Run after a change to `run-worker.py`/`backends.py` and on a new machine | 1 real run per backend (Sonnet, low effort, a few cents) | about 30 s each | 5 per backend |
@@ -93,6 +94,7 @@ or the role JSON files. Add a row to "Results" below with the date, OS and numbe
 | 2026-10-16 | GitHub Actions ubuntu-latest and windows-latest, Python 3.12 | CI, first run (0.13.4) | Ubuntu all pass (`git_guard` 37/37); Windows `git_guard` 35/36, then `push_guard` 9/10 | Windows: TEMP is the 8.3 short path `C:\Users\RUNNER~1\...`, and the test compared it with the launcher's resolved path (fixed: resolved temp root). The runner caught the "known gap" deletion that a Windows 11 PC and the Ubuntu runner miss: now INFO, not a check |
 
 | 2026-11-01 | CachyOS Linux, git, Python 3.14 | 0.18.0: `kanban_board`, `kanban_run`, `kanban_finish`, `kanban_stop` | 29/29, 38/38, 32/32, 29/29 | fake `claude`, no model; `kanban_run` and `kanban_finish` run twice; three mutations (stop signals a non-kanban pid, `--now` leaves the ticket in-progress, loop ignores pause) each fail `kanban_stop` |
+| 2026-11-01 | CachyOS Linux, Claude Code, git, Python 3.14 | 0.18.0: `kanban_real` (K5) | run 1: 3/14 (600 s timeout); run 2: 12/14, then the 2 test mistakes fixed and re-checked against run 2's kept directory only (not a third model run) | 2 model runs of 3 Sonnet dev tickets each (about $0.2 list per ticket); run 2 wall 45 s. Run 1 found a real bug: a ticket `Blocked by` a ticket in `review` never started (the dispatcher counted only `done` as a finished blocker, and only the planner sets `done`), so the loop idled to the timeout; fixed in `collect` (review counts as merged) and the loop's end test (only ready todo tickets keep it going); regression checks in `kanban_finish` (19 -> 20) and `kanban_run`. The 2 test mistakes: run start taken from the stamp minus secs (the stamp is the start), and pool slot worktrees `toy.w1/.w2` are kept by design |
 
 macOS: not run.
 
@@ -111,7 +113,7 @@ macOS: not run.
   through (`<wrapper> log > .git/hooks/x`); the hooks guard would catch it after the run. `push_guard.py`'s
   "known gap" (a teammate's branch deleted by URL) is caught on some machines and missed on others; why is not known.
 
-- The kanban dispatcher: a real `claude` run (K5), Windows (stop reads `/proc`, `ps` elsewhere), several repos in one
+- The kanban dispatcher: Windows (stop reads `/proc`, `ps` elsewhere), several repos in one
   workspace, several features at once.
 
 ## Owed (do on the next machine or feature)

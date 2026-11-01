@@ -142,6 +142,9 @@ repo root:
 | `kanban.py pause [--minutes N]` / `resume` | nothing starts until the pause ends; running workers go on |
 | `kanban.py service <feature>` | prints the `systemd-run --user` line that starts `run` (installs nothing) |
 
+The systemd template `kit/systemd/hdt-kanban@.service` is UNVERIFIED (`systemd-analyze verify` fails with "Failed to setup
+working directory"); the supported start is `kanban.py service <feature>` (a `systemd-run --user` line).
+
 Safe start: `python <kit>/kanban.py run <feature> --dry-run`, then run the `service` line it prints so the loop outlives
 the chat's background jobs. `scratch.py dispatch` is unchanged; the two share the worker locks and refuse to run together.
 

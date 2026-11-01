@@ -391,6 +391,14 @@ def main():
     check("the next run adopts and merges it", "merged 18" in o and field(repo, "18") == "review", o)
     kill_all(repo)
 
+    # --- a ticket blocked by a ticket in `review` (merged) starts; the loop does not end while it waits (K5 bug)
+    reset_scratch(repo)
+    ticket(repo, "19", "write src/19.py S"); ticket(repo, "20", "write src/20.py T", blocked="19"); commit_tickets(repo)
+    rc, o = run(repo, "--interval", "1", timeout=120)
+    check("Blocked by a ticket in review: it starts after the merge and the loop ends only after both",
+          rc == 0 and o.strip().splitlines()[-1] == "KANBAN OK done: merged 2, review 2, blocked 0"
+          and field(repo, "19") == "review" and field(repo, "20") == "review", o)
+
 
 if __name__ == "__main__":
     try:

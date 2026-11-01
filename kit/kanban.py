@@ -144,9 +144,12 @@ def collect(scratch, feats):
         files = sorted((scratch / feat / "issues").glob("*.md"))
         texts = {p: p.read_text(encoding="utf-8", errors="replace") for p in files}
         fields = {p: {"Status": tk.field(t, "Status")} for p, t in texts.items()}
+        # a blocker in `review` is already merged into the feature branch (only the planner's review sets `done`, which
+        # nothing in this loop waits for), so it releases its dependents; otherwise `Blocked by` would never open
+        eff = {p: {"Status": "done" if f["Status"] == "review" else f["Status"]} for p, f in fields.items()}
         by_num = {}
         for p in files:
-            by_num.setdefault(tk.number(p), []).append((p, fields[p]))
+            by_num.setdefault(tk.number(p), []).append((p, eff[p]))
         for p in files:
             text = texts[p]
             status = fields[p]["Status"]
@@ -778,7 +781,7 @@ def cmd_run(a):
                                 start=not a.drain and not stop))
             if a.once or stop:
                 break
-            todo = [t for t in collect(scratch, [a.feature])["todo"] if t["name"] not in bad]
+            todo = [t for t in collect(scratch, [a.feature])["todo"] if t["name"] not in bad and t["ready"]]
             if not fin.running() and (a.drain or not todo):
                 rv, bl = fin.counts()
                 print(f"KANBAN OK {label}: merged {fin.merged}, review {rv}, blocked {bl}")
