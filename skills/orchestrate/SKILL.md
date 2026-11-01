@@ -1,7 +1,7 @@
 ---
 name: orchestrate
 description: Run dev, reviewer, docs, researcher workers; verify results.
-version: 0.12.0
+version: 0.13.0
 author: hermes-dev-team contributors
 license: MIT
 platforms: [linux, macos, windows]
@@ -15,7 +15,7 @@ metadata:
 
 You are the planner in Hermes. Workers are headless runs started by `kit/run-worker.py` on whichever backend is set
 up (Claude Code or a Hermes worker profile; the launcher picks it). One worker at a time, except a parallel dev group
-(step 4b). Keep your own context small:
+(step 4b) or the kanban dispatcher (step 4c). Keep your own context small:
 read result lines and files, never a worker's transcript.
 
 ## When to Use
@@ -82,6 +82,22 @@ Load a reference with `skill_view(name="orchestrate", file_path="references/<fil
    and the merge line under it, then step 6 for each merged ticket. `FAIL conflict`: redispatch that ticket alone
    (step 4) from the new tip. Last line `DISPATCH STOP usage limit hit`: pause the whole queue and tell the user;
    never redispatch until the limit resets. Never dispatch a reviewer, docs or researcher in a group.
+4c. **Kanban dispatcher** (opt-in; this is the kit's own board, NOT Hermes' built-in `hermes kanban`; guide
+   `docs/kanban-guide.md`). Use it instead of 4b when a whole feature's tickets should run on their own: it keeps up to
+   `max_workers` (at most 3) dev workers busy, refills a slot when one ends, merges each PASS branch, retries a failure
+   once, pauses on a usage limit. Requirements, checked FIRST, never assumed:
+   - `KIT/kanban.py` exists. If the kit has no `kanban.py` (kit older than 0.18.0, this skill older than 0.13.0), STOP and
+     tell the user: "the dev-kit here is too old for the kanban dispatcher: `git pull` in the hermes-dev-team repo, then
+     `link-skills.py`". If there is no `hermes-dev-team` folder at all, ask the user before installing (`LEARN.md`).
+   - `.team.json` has `max_workers` >= 1 and a `setup` list; the repo is clean and on the feature branch.
+   Start: `python KIT/kanban.py run <feature> --dry-run` (shows what would start, writes nothing), then run the line
+   printed by `python KIT/kanban.py service <feature>` (a `systemd-run --user` unit; a plain background job is killed
+   with the chat). Watch with `kanban.py board` / `status`; end your turn and act on the exit notice or the user. While it
+   runs it is the only writer of ticket Status: pause it (`kanban.py pause`) or stop it (`kanban.py stop`) before editing
+   tickets, and never run `scratch.py dispatch` beside it. Finished tickets are `review` (already merged): continue at
+   step 6 for each, review as usual, and you set `done`. A `blocked` ticket has a `Dispatcher:` line in its `## Result`:
+   read it and the progress log, fix the cause, set `todo` again. Reviewers, docs and researcher still run through
+   `run-worker.py`, never through the dispatcher.
 5. **Read the one RESULT line**: `RESULT dev PASS <sha> | ...` or `RESULT dev FAIL <reason> | ...`, plus any denied
    calls, and show the user the ticket's `Not checked:` line. Exit 0 = PASS and the guards held (main unmoved, branch
    unchanged, no history rewrite, no protected file changed, nothing pushed). Never trust a worker's own exit code.

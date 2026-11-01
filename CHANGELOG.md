@@ -6,6 +6,14 @@ mark an entry **action** when another machine must do something (re-run `link-sk
 Format: version, date, then one line per change, naming the file. **watch:** marks a change to the run files that
 hermes-dev-watch reads (`docs/watch-contract.md`).
 
+## 0.18.2 - 2026-11-01
+
+- `skills/orchestrate` 0.13.0: step 4c, the kanban dispatcher. It checks that `kit/kanban.py` exists and tells the user to
+  `git pull` the kit (or asks before installing it) when it does not. **action:** other machines `git pull` and a NEW
+  Hermes session loads the new skill; a kit older than 0.18.0 has no `kanban.py`.
+- README and `docs/kanban-guide.md` say plainly that this kanban is the kit's own dispatcher over the ticket files, NOT
+  Hermes' built-in `hermes kanban` (which spawns `hermes` workers, has its own database, and is a separate feature).
+
 ## 0.18.1 - 2026-11-01
 
 - **One blocker rule** (`kit/tickets.py` `open_blockers`): `kanban.py` and `scratch.py dispatch` both treat a blocker in

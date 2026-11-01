@@ -10,6 +10,10 @@ Sonnet workers, `tests/kanban_real.py`). It has **not** been used on a real proj
 
 ## 1. What it is, in three sentences
 
+> **Not Hermes' built-in kanban.** `hermes kanban` and its dashboard are a separate Hermes feature: its own SQLite board,
+> `hermes` workers. This dispatcher belongs to the dev-kit: it reads the ticket files and runs the kit's `run-worker.py`
+> workers, with the kit's guards. The two share nothing, and one does not show the other's tickets.
+
 `kanban.py run <feature>` is a loop. Every few seconds it looks at the feature's ticket files, starts every ticket that is
 ready (up to `max_workers`, at most 3) in its own worktree, and when a worker finishes it merges the result into the
 feature branch and moves the ticket on. The ticket files stay the only source of truth: no database, and the planner can
@@ -126,7 +130,13 @@ merged, no checkout. A dead dispatcher's lock is left for the next `run` to repl
 | `stop` says `draining (N workers still running)` | normal; they finish on their own, the next `run` merges them |
 | `status` says running but nothing moves | `kanban.py board` shows the progress tail of each running ticket; `stop --now` if it is truly stuck |
 
-## 10. Quick start
+## 10. Which kit version has it
+
+Kit 0.18.0 (`kit/kanban.py`) and orchestrate skill 0.13.0 (step 4c). Check with `grep ^version skills/orchestrate/SKILL.md`
+and `ls kit/kanban.py`. On an older kit: `git pull` in the hermes-dev-team repo, run `python kit/link-skills.py`, start a new
+Hermes session. No kit folder at all: install it first (`LEARN.md`).
+
+## 11. Quick start
 
 ```
 cd <project repo root>

@@ -129,6 +129,10 @@ batches with `python KIT/scratch.py sync-main --apply`. See the orchestrate skil
 
 ## Kanban dispatcher
 
+**This is the dev-kit's own dispatcher, not Hermes' built-in `hermes kanban`.** Hermes' kanban spawns `hermes` workers from its own
+database (`~/.hermes/kanban.db`); this one runs the kit's Claude Code workers from the ticket files and has nothing to do
+with that database.
+
 Opt-in. `kit/kanban.py` keeps up to `max_workers` (at most 3) dev workers busy from the ticket files of one feature and
 shows them as a board. The ticket files stay the only source of truth; there is no database. Run it from the project
 repo root:
