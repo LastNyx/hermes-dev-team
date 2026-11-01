@@ -1,11 +1,22 @@
 #!/usr/bin/env python3
-"""Kanban view of a project's tickets and of the dispatcher. READ-ONLY: this file never writes in the project. No model.
+"""Kanban view of a project's tickets and the dispatcher. `board` and `status` are READ-ONLY; only `run` writes. No model.
 
 Usage (cwd = the project repo root, like scratch.py):
     python <kit>/kanban.py board [--feature F] [--json]   # tickets by Status: todo, in-progress, review, blocked, done
     python <kit>/kanban.py status [--json]                # dispatcher state: running, pid, workers, pause
+    python <kit>/kanban.py run <feature> [--once] [--dry-run] [--interval S]
+                                                          # START side (K2): each tick start ready tickets in pool slots
 
-Files read (all under the scratch folder; K2/K3 write the two dispatcher files, here they are only read):
+`run` (docs/open/kanban-dispatcher.md D3/D5/D6): takes runs/dispatcher.lock (refuses when that pid is alive, replaces a
+stale one, removes it on exit, SIGTERM and SIGINT), needs `.team.json` max_workers >= 1 and `setup`, a clean repo on the
+ticket's Branch and no live worker lock. A READY ticket (pick_ready: todo, blockers done, Seam apart from running tickets
+and from each other, same repo and Branch as the running group, free slot, cap min(max_workers, 3), not paused) gets a pool
+slot (parallel.prepare_slot), Status in-progress and a detached `run-worker.py dev --slot N` (stdout in
+runs/kanban-slot-N.out). The scratch repo is committed once per tick that changed a Status. `--once`: one tick, workers
+keep running. `--dry-run`: print `would start NN in slot K`, write nothing. Last line `KANBAN OK started N` or `KANBAN STOP
+<reason>`. Finish handling (merge, review/blocked, retry, pause, timeout, orphans) is K3 and not here yet.
+
+Files read (all under the scratch folder; `run` writes dispatcher.lock, K3 writes dispatcher.pause):
     <scratch>/<feature>/issues/NN-*.md      tickets (header lines Status, Branch, Repo, Blocked by, Seam)
     <scratch>/runs.log                      one tab-separated line per run: stamp, role, model, verdict, turns=, secs, ..., ticket=<file>.md
         e.g. 20261016-120000<TAB>dev<TAB>sonnet<TAB>PASS 1a2b3c4<TAB>turns=18<TAB>22s<TAB>...<TAB>ticket=01-mul.md<TAB>fmt=1
@@ -21,13 +32,14 @@ retries = non-PASS runs of the ticket before its last run.
 
 Exit 0, or 1 with one line `KANBAN STOP <reason>` (no .team.json, no scratch folder, no feature).
 """
-import argparse, json, pathlib, re, sys, time
+import argparse, json, os, pathlib, re, signal, subprocess, sys, time
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import teamcfg  # noqa: E402
 import plannerlog as pl  # noqa: E402
 import tickets as tk  # noqa: E402
 import parallel  # noqa: E402
+import scratch as sc  # noqa: E402
 
 COLUMNS = [("todo", "Todo"), ("in-progress", "In progress"), ("review", "Review"), ("blocked", "Blocked"),
            ("done", "Done")]
@@ -202,14 +214,257 @@ def cmd_status(a):
     return 0
 
 
+# ------------------------------------------------------------------ run: start side (K2)
+
+def ticket_key(t):
+    m = re.match(r"(\d+)([a-z]*)", str(t.get("number") or ""), re.I)
+    return (int(m.group(1)), m.group(2).lower()) if m else (10 ** 9, str(t.get("number")))
+
+
+def pick_ready(tickets, running, max_workers, paused_until, now):
+    """Tickets to start now, in ticket-number order. Plain dicts (the `collect` shape): tickets need number, status,
+    blockers_open, seam_paths, repo, branch; running needs seam_paths, repo, branch. None when nothing may start."""
+    if paused_until is not None and paused_until > now:
+        return []
+    free = min(int(max_workers), HARD_CAP) - len(running)
+    if free <= 0:
+        return []
+    group = (running[0].get("repo"), running[0].get("branch")) if running else None
+    picked = []
+    for t in sorted(tickets, key=ticket_key):
+        if len(picked) >= free:
+            break
+        if t.get("status") != "todo" or t.get("blockers_open") or not t.get("branch"):
+            continue
+        if group is None:
+            group = (t.get("repo"), t.get("branch"))      # v1: one repo + feature branch at a time
+        if (t.get("repo"), t.get("branch")) != group:
+            continue
+        me = "\0candidate"
+        others = [(f"r{i}", r.get("seam_paths") or []) for i, r in enumerate(running)] + \
+                 [(f"p{i}", p.get("seam_paths") or []) for i, p in enumerate(picked)]
+        if any(a == me for a, _, _ in parallel.seam_conflicts([(me, t.get("seam_paths") or []), *others])):
+            continue
+        picked.append(t)
+    return picked
+
+
+def lock_file(scratch):
+    return scratch / "runs" / "dispatcher.lock"
+
+
+def acquire_lock(scratch, feature):
+    """Create runs/dispatcher.lock atomically. Returns None or the pid of a live dispatcher; a stale lock is replaced."""
+    p = lock_file(scratch)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    body = json.dumps({"pid": os.getpid(), "started": time.strftime("%Y-%m-%d %H:%M"), "feature": feature})
+    for _ in range(3):
+        try:
+            fd = os.open(p, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            try:
+                d = json.loads(p.read_text(encoding="utf-8"))
+            except (ValueError, OSError):
+                d = None
+            pid = d.get("pid") if isinstance(d, dict) else None
+            if teamcfg.pid_alive(pid):
+                return pid
+            try:
+                p.unlink()
+            except FileNotFoundError:
+                pass
+            continue
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(body)
+        return None
+    return -1
+
+
+def release_lock(scratch):
+    p = lock_file(scratch)
+    try:
+        d = json.loads(p.read_text(encoding="utf-8"))
+        if isinstance(d, dict) and d.get("pid") == os.getpid():
+            p.unlink()
+    except (OSError, ValueError):
+        pass
+
+
+def worker_argv(ticket_path, n):
+    """Same command line as parallel.run_worker builds."""
+    return [sys.executable, "-u", str(parallel.KIT / "run-worker.py"), "dev", f"ticket: {pathlib.Path(ticket_path).as_posix()}",
+            "--slot", str(n)]
+
+
+def used_slots(scratch, children):
+    used = {n for n, (_, p, _) in children.items() if p.poll() is None}
+    for d, alive in worker_locks(scratch):
+        m = re.search(r"slot-(\d+)\.lock$", str(d.get("_path", "")))
+        if alive and m:
+            used.add(int(m.group(1)))
+    return used
+
+
+def check_run(a, say=print):
+    """Preconditions, like scratch.py dispatch. Returns (tc, scratch, repos, cap) or raises Stop."""
+    tc, scratch, repos = sc.ctx()
+    cfg = tc["cfg"]
+    if tc["source"] is None:
+        raise Stop("no .team.json found (run it from the project repo root)")
+    if not scratch.is_dir():
+        raise Stop(f"no scratch folder {scratch.as_posix()}")
+    if not (scratch / a.feature / "issues").is_dir():
+        raise Stop(f"no tickets in {(scratch / a.feature / 'issues').as_posix()}")
+    try:
+        mw = int(cfg.get("max_workers") or 0)
+    except (TypeError, ValueError):
+        mw = 0
+    if mw < 1:
+        raise Stop(".team.json has no max_workers >= 1 (set it, at most 3)")
+    if not cfg.get("setup"):
+        raise Stop(".team.json has no `setup` (the commands that install dependencies in a fresh worktree)")
+    if a.interval <= 0:
+        raise Stop("--interval must be a positive number of seconds")
+    return tc, scratch, repos, min(mw, HARD_CAP)
+
+
+def open_tickets(scratch, feature, repos):
+    cols = collect(scratch, [feature])
+    out = []
+    for status in ("todo", "in-progress"):
+        for t in cols[status]:
+            r = t["repo"]
+            t["repo"] = r if r and not r.startswith("<") else (next(iter(repos)) if len(repos) == 1 else None)
+            out.append(t)
+    return out
+
+
+def check_tree(scratch, feature, repos):
+    """Repo clean, on the Branch of some open ticket. Returns {repo name: current branch}."""
+    cur, tickets = {}, open_tickets(scratch, feature, repos)
+    for t in tickets:
+        if t["repo"] not in repos:
+            raise Stop(f"{t['name']}: repo {t['repo']} is not one of {', '.join(repos) or 'the repos'}")
+    for rn in {t["repo"] for t in tickets}:
+        cur[rn] = sc.git(repos[rn], "branch", "--show-current")
+        if sc.dirty(repos[rn]):
+            raise Stop(f"{rn} has uncommitted changes")
+    if tickets and not any(t["branch"] == cur[t["repo"]] for t in tickets):
+        t = tickets[0]
+        raise Stop(f"{t['repo']} is not on {t['branch']}")
+    return cur
+
+
+def tick(a, tc, scratch, repos, cap, children, cur, bad, say=print):
+    """One pass: pick, prepare the slot, mark in-progress, start. Returns the list of started ticket numbers."""
+    fd = scratch / a.feature
+    tickets = [t for t in open_tickets(scratch, a.feature, repos) if t["branch"] == cur.get(t["repo"])]
+    running = [t for t in tickets if t["status"] == "in-progress"]
+    todo = [t for t in tickets if t["status"] == "todo" and t["name"] not in bad]
+    pp = scratch / "runs" / "dispatcher.pause"
+    paused = None
+    try:
+        paused = float(pp.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        pass
+    picks = pick_ready(todo, running, cap, paused, time.time())
+    used, started, changed = used_slots(scratch, children), [], False
+    for t in picks:
+        free = [n for n in range(1, cap + 1) if n not in used]
+        if not free:
+            break
+        n = free[0]
+        used.add(n)
+        if a.dry_run:
+            say(f"would start {t['number']} in slot {n}")
+            started.append(t["number"])
+            continue
+        repo, br = repos[t["repo"]], t["branch"]
+        base = parallel.out(repo, "rev-parse", "HEAD")
+        slot, err, note = parallel.prepare_slot(repo, n, parallel.ticket_branch(br, t["number"]), base or "HEAD",
+                                                tc["cfg"]["setup"], scratch / "runs")
+        if err or not base:
+            say(f"  {t['number']}: slot {n} not ready: {err or 'cannot read the branch tip'}; skipped")
+            bad.add(t["name"])
+            continue
+        path = fd / "issues" / t["name"]
+        text, crlf = sc.pl.read(path)
+        new = sc.set_status(text, "in-progress")
+        if new is None:
+            say(f"  {t['number']}: no Status line; skipped")
+            bad.add(t["name"])
+            continue
+        sc.pl.write(path, new, crlf)
+        env = {**os.environ, "HDT_CONFIG": str(tc["source"]), "HDT_SLOT_OF": t["repo"], "PYTHONUNBUFFERED": "1"}
+        try:
+            out = open(scratch / "runs" / f"kanban-slot-{n}.out", "ab")
+            proc = subprocess.Popen(worker_argv(path, n), cwd=slot, env=env, stdin=subprocess.DEVNULL, stdout=out,
+                                    stderr=subprocess.STDOUT, start_new_session=True)
+            out.close()
+        except OSError as e:
+            sc.pl.write(path, text, crlf)
+            say(f"  {t['number']}: cannot start the worker: {e}; skipped")
+            bad.add(t["name"])
+            continue
+        children[n] = (t, proc, time.time())
+        changed = True
+        started.append(t["number"])
+        say(f"started {t['number']} in slot {n} ({parallel.ticket_branch(br, t['number'])} @ {base[:8]}, pid {proc.pid})"
+            + (f" [{note}]" if note else ""))
+    if changed:
+        sha = sc.commit_scratch(scratch, f"dispatch {' '.join(started)} (kanban)")
+        if sha:
+            say(f"  scratch committed {sha}")
+    return started
+
+
+def cmd_run(a):
+    tc, scratch, repos, cap = check_run(a)
+    cur = check_tree(scratch, a.feature, repos)
+    st = dispatcher_status(tc, scratch)
+    if st["running"] and not a.dry_run:
+        raise Stop(f"a dispatcher is already running (pid {st['pid']})")
+    live = [d for d, al in worker_locks(scratch) if al]
+    if live:
+        raise Stop(f"a worker is running ({live[0].get('role')} {live[0].get('ticket') or '-'}); "
+                   "it is not one of this dispatcher's")
+    children, bad, started, stop = {}, set(), 0, []
+    if a.dry_run:
+        n = len(tick(a, tc, scratch, repos, cap, children, cur, bad))
+        print(f"KANBAN OK started 0 (dry run: would start {n})")
+        return 0
+    other = acquire_lock(scratch, a.feature)
+    if other is not None:
+        raise Stop(f"a dispatcher is already running (pid {other})" if other > 0 else "cannot take the dispatcher lock")
+    old = {s: signal.signal(s, lambda *_: stop.append(1)) for s in (signal.SIGTERM, signal.SIGINT)}
+    try:
+        while True:
+            started += len(tick(a, tc, scratch, repos, cap, children, cur, bad))
+            if a.once or stop:
+                break
+            deadline = time.time() + a.interval
+            while time.time() < deadline and not stop:
+                time.sleep(0.2)
+            if stop:
+                break
+    finally:
+        for s, h in old.items():
+            signal.signal(s, h)
+        release_lock(scratch)
+    print(f"KANBAN OK started {started}")
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("board"); p.add_argument("--feature"); p.add_argument("--json", action="store_true")
     p = sub.add_parser("status"); p.add_argument("--json", action="store_true")
+    p = sub.add_parser("run"); p.add_argument("feature"); p.add_argument("--once", action="store_true")
+    p.add_argument("--dry-run", action="store_true"); p.add_argument("--interval", type=float, default=10)
     a = ap.parse_args()
     try:
-        return {"board": cmd_board, "status": cmd_status}[a.cmd](a)
+        return {"board": cmd_board, "status": cmd_status, "run": cmd_run}[a.cmd](a)
     except Stop as e:
         print(f"KANBAN STOP {e}")
         return 1
