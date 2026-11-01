@@ -6,6 +6,10 @@ Usage (cwd = the project repo root, like scratch.py):
     python <kit>/kanban.py status [--json]                # dispatcher state: running, pid, workers, pause
     python <kit>/kanban.py run <feature> [--once] [--dry-run] [--interval S] [--grace S] [--drain]
                                                           # each tick: reap finished workers (K3), start ready tickets (K2)
+    python <kit>/kanban.py stop [--now] [--wait S]        # graceful: no new starts; --now also stops the workers (K4)
+    python <kit>/kanban.py pause [--minutes N]            # nothing starts for N minutes (default 60); running workers go on
+    python <kit>/kanban.py resume                         # remove the pause
+    python <kit>/kanban.py service <feature>              # PRINT the systemd-run command that starts `run` (installs nothing)
 
 `run` (docs/open/kanban-dispatcher.md D3/D5/D6): takes runs/dispatcher.lock (refuses when that pid is alive, replaces a
 stale one, removes it on exit, SIGTERM and SIGINT), needs `.team.json` max_workers >= 1 and `setup`, a clean repo on the
@@ -45,9 +49,21 @@ Files read (all under the scratch folder; `run` writes dispatcher.lock, K3 write
 `board` last_result is rebuilt from the ticket's last non-planner runs.log line as `RESULT <role> <verdict>`.
 retries = non-PASS runs of the ticket before its last run.
 
-Exit 0, or 1 with one line `KANBAN STOP <reason>` (no .team.json, no scratch folder, no feature).
+STOP side (K4, D6): `stop` reads runs/dispatcher.lock. No lock or a dead pid: `KANBAN OK not running`. A live pid whose
+/proc/<pid>/cmdline (or `ps`) does not contain `kanban.py` is never signalled: `KANBAN STOP pid N is not a kanban
+dispatcher (stale lock)`, exit 1, nothing removed. Graceful (default): SIGTERM (the loop starts nothing, releases the lock;
+with `run --grace S` it first waits for its workers), wait up to `--wait S` (default 60) for the lock to go, then
+`KANBAN OK stopped` or `KANBAN OK draining (N workers still running)` (exit 0, not an error; workers are detached and the
+next `run` adopts and merges them). `--now`: SIGTERM, then every live worker lock is stopped with scratch.stop_one (like
+`scratch.py stop`), their in-progress tickets go back to `todo`, runs.log gets `NOTE kanban force-stopped NN`, one scratch
+commit, `KANBAN OK force-stopped N`. `pause` writes runs/dispatcher.pause (now + N minutes); a running loop reads it every
+tick. `service` writes no file: it prints the `systemd-run --user` line a planner uses (a plain background job dies with
+Hermes' shell; a transient unit does not). The template `kit/systemd/hdt-kanban@.service` is the same thing as a unit file.
+
+Exit 0, or 1 with one line `KANBAN STOP <reason>` (no .team.json, no scratch folder, no feature, a foreign pid, a
+dispatcher that does not exit).
 """
-import argparse, json, os, pathlib, re, signal, subprocess, sys, threading, time
+import argparse, json, os, pathlib, re, shlex, signal, subprocess, sys, threading, time
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import teamcfg  # noqa: E402
@@ -783,6 +799,134 @@ def cmd_run(a):
     return 0
 
 
+# ------------------------------------------------------------------ stop, pause, resume, service (K4)
+
+def proc_cmdline(pid):
+    """Command line of a process as one string, or None when it cannot be read (then nothing is signalled)."""
+    try:
+        return pathlib.Path(f"/proc/{int(pid)}/cmdline").read_bytes().replace(b"\0", b" ").decode("utf-8", "replace")
+    except (OSError, ValueError):
+        pass
+    if sys.platform == "win32":
+        return None
+    try:
+        r = subprocess.run(["ps", "-p", str(int(pid)), "-o", "args="], capture_output=True, text=True, timeout=10)
+        return r.stdout.strip() or None
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
+def read_dispatcher(scratch):
+    try:
+        d = json.loads(lock_file(scratch).read_text(encoding="utf-8"))
+        return d if isinstance(d, dict) else None
+    except (OSError, ValueError):
+        return None
+
+
+def wait_until(cond, secs):
+    end = time.time() + secs
+    while time.time() < end:
+        if cond():
+            return True
+        time.sleep(0.2)
+    return cond()
+
+
+def cmd_stop(a):
+    tc, scratch = project()
+    if a.wait < 0:
+        raise Stop("--wait must not be negative")
+    d = read_dispatcher(scratch)
+    pid = d.get("pid") if d else None
+    if not teamcfg.pid_alive(pid):
+        print("KANBAN OK not running")
+        return 0
+    pid = int(pid)
+    if pid == os.getpid() or "kanban.py" not in (proc_cmdline(pid) or ""):
+        print(f"KANBAN STOP pid {pid} is not a kanban dispatcher (stale lock)")
+        return 1
+    feature = d.get("feature")
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except OSError as e:
+        raise Stop(f"cannot signal dispatcher pid {pid}: {e}")
+    gone = lambda: not lock_file(scratch).exists() or not teamcfg.pid_alive(pid)
+    if not a.now:
+        ok = wait_until(gone, a.wait)
+        n = len(live_locks(scratch))
+        print(f"KANBAN OK draining ({n} workers still running)" if n or not ok else "KANBAN OK stopped")
+        return 0
+    stopped = []
+    for lock, alive in worker_locks(scratch):
+        if not alive:
+            continue
+        sc.stop_one(lock)
+        wait_until(lambda lk=lock: not teamcfg.read_lock_file(lk["_path"])[1], 15)
+        stopped.append(lock)
+    if not wait_until(gone, max(a.wait, 1)):
+        print(f"KANBAN STOP dispatcher pid {pid} is still running after {a.wait:g}s")
+        return 1
+    names = []
+    for lock in stopped:
+        name = pathlib.PurePath(str(lock.get("ticket") or "")).name
+        names.append(name)
+        for f in (feature, lock.get("feature")):
+            path = scratch / f / "issues" / name if f and name else None
+            if path and path.is_file():
+                text, crlf = sc.pl.read(path)
+                if tk.field(text, "Status") == "in-progress":
+                    new = sc.set_status(text, "todo")
+                    if new is not None:
+                        sc.pl.write(path, new, crlf)
+                break
+    log_feature = feature if feature and (scratch / feature).is_dir() else None
+    for name in names:
+        if log_feature and name:
+            sc.pl.log(scratch, log_feature, f"NOTE kanban force-stopped {sc.pl.num(name)}", "stop", ticket=None)
+    if names and sc.commit_scratch(scratch, f"force-stopped {' '.join(sc.pl.num(n) for n in names if n)} (kanban)"):
+        pass
+    print(f"KANBAN OK force-stopped {len(stopped)}")
+    return 0
+
+
+def cmd_pause(a):
+    tc, scratch = project()
+    if a.minutes <= 0:
+        raise Stop("--minutes must be a positive number")
+    until = int(time.time() + a.minutes * 60)
+    pp = scratch / "runs" / "dispatcher.pause"
+    pp.parent.mkdir(parents=True, exist_ok=True)
+    pp.write_text(str(until), encoding="utf-8")
+    print(f"KANBAN OK paused until {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(until))}")
+    return 0
+
+
+def cmd_resume(a):
+    tc, scratch = project()
+    pp = scratch / "runs" / "dispatcher.pause"
+    had = pp.is_file()
+    pp.unlink(missing_ok=True)
+    print("KANBAN OK resumed" if had else "KANBAN OK not paused")
+    return 0
+
+
+def cmd_service(a):
+    """Print, never install or write."""
+    tc, scratch = project()
+    if not (scratch / a.feature / "issues").is_dir():
+        raise Stop(f"no feature {a.feature} (no tickets in {(scratch / a.feature / 'issues').as_posix()})")
+    repo = tc["base"]
+    safe = lambda x: re.sub(r"[^A-Za-z0-9_-]+", "-", x).strip("-") or "x"
+    unit = f"hdt-kanban-{safe(pathlib.Path(repo).name)}-{safe(a.feature)}"
+    q = shlex.quote
+    print(" ".join(["systemd-run", "--user", "--collect", f"--unit={unit}", f"--working-directory={q(str(repo))}",
+                    "--property=KillMode=process", q("--setenv=PATH=" + os.environ.get("PATH", "")), "python3",
+                    q(str(pathlib.Path(__file__).resolve())), "run", q(a.feature)]))
+    print(f"KANBAN OK printed (nothing installed); stop it with `kanban.py stop`, see it with `systemctl --user status {unit}`")
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -791,9 +935,14 @@ def main():
     p = sub.add_parser("run"); p.add_argument("feature"); p.add_argument("--once", action="store_true")
     p.add_argument("--dry-run", action="store_true"); p.add_argument("--interval", type=float, default=10)
     p.add_argument("--grace", type=float, default=0); p.add_argument("--drain", action="store_true")
+    p = sub.add_parser("stop"); p.add_argument("--now", action="store_true"); p.add_argument("--wait", type=float, default=60)
+    p = sub.add_parser("pause"); p.add_argument("--minutes", type=float, default=60)
+    sub.add_parser("resume")
+    p = sub.add_parser("service"); p.add_argument("feature")
     a = ap.parse_args()
     try:
-        return {"board": cmd_board, "status": cmd_status, "run": cmd_run}[a.cmd](a)
+        return {"board": cmd_board, "status": cmd_status, "run": cmd_run, "stop": cmd_stop, "pause": cmd_pause,
+                "resume": cmd_resume, "service": cmd_service}[a.cmd](a)
     except Stop as e:
         print(f"KANBAN STOP {e}")
         return 1

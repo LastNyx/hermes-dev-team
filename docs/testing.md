@@ -92,6 +92,8 @@ or the role JSON files. Add a row to "Results" below with the date, OS and numbe
 
 | 2026-10-16 | GitHub Actions ubuntu-latest and windows-latest, Python 3.12 | CI, first run (0.13.4) | Ubuntu all pass (`git_guard` 37/37); Windows `git_guard` 35/36, then `push_guard` 9/10 | Windows: TEMP is the 8.3 short path `C:\Users\RUNNER~1\...`, and the test compared it with the launcher's resolved path (fixed: resolved temp root). The runner caught the "known gap" deletion that a Windows 11 PC and the Ubuntu runner miss: now INFO, not a check |
 
+| 2026-11-01 | CachyOS Linux, git, Python 3.14 | 0.18.0: `kanban_board`, `kanban_run`, `kanban_finish`, `kanban_stop` | 29/29, 38/38, 32/32, 29/29 | fake `claude`, no model; `kanban_run` and `kanban_finish` run twice; three mutations (stop signals a non-kanban pid, `--now` leaves the ticket in-progress, loop ignores pause) each fail `kanban_stop` |
+
 macOS: not run.
 
 ## Not covered
@@ -108,6 +110,9 @@ macOS: not run.
 - `git_guard.py --real` not yet on Windows. Unmeasured: whether the wrapper's prefix rule lets a shell redirect
   through (`<wrapper> log > .git/hooks/x`); the hooks guard would catch it after the run. `push_guard.py`'s
   "known gap" (a teammate's branch deleted by URL) is caught on some machines and missed on others; why is not known.
+
+- The kanban dispatcher: a real `claude` run (K5), Windows (stop reads `/proc`, `ps` elsewhere), several repos in one
+  workspace, several features at once.
 
 ## Owed (do on the next machine or feature)
 

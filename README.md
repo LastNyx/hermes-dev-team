@@ -127,6 +127,27 @@ If other people commit to the repo with their own workflow, the kit stays your p
 scratch folder, run `python KIT/scratch.py baseline <feature>` before the first ticket, and bring main in only between
 batches with `python KIT/scratch.py sync-main --apply`. See the orchestrate skill's `references/shared-repo.md`.
 
+## Kanban dispatcher
+
+Opt-in. `kit/kanban.py` keeps up to `max_workers` (at most 3) dev workers busy from the ticket files of one feature and
+shows them as a board. The ticket files stay the only source of truth; there is no database. Run it from the project
+repo root:
+
+| Command | Does |
+|---|---|
+| `kanban.py board [--feature F] [--json]` | tickets by Status, with running progress (read-only) |
+| `kanban.py status [--json]` | dispatcher running or not, workers, pause |
+| `kanban.py run <feature>` | the loop: start ready tickets, merge PASS branches, mark `review` / `blocked` |
+| `kanban.py stop [--now]` | graceful (finish running workers, start none) or `--now` (stop workers, tickets back to `todo`) |
+| `kanban.py pause [--minutes N]` / `resume` | nothing starts until the pause ends; running workers go on |
+| `kanban.py service <feature>` | prints the `systemd-run --user` line that starts `run` (installs nothing) |
+
+Safe start: `python <kit>/kanban.py run <feature> --dry-run`, then run the `service` line it prints so the loop outlives
+the chat's background jobs. `scratch.py dispatch` is unchanged; the two share the worker locks and refuse to run together.
+
+Not in v1: several features at once, automatic reviewers or fix tickets, writes from the board. Design:
+`docs/open/kanban-dispatcher.md`.
+
 ## Talking to the planner
 
 Plain words in the planner chat; nothing else to remember.
