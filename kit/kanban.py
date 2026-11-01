@@ -372,6 +372,18 @@ def open_tickets(scratch, feature, repos):
     return out
 
 
+def repo_dirty(repo, scratch):
+    """`git status --short` of `repo` without the scratch folder's own paths: a scratch folder tracked inside the project
+    repo is rewritten by the dispatcher's status edits, which must not count as a dirty repo."""
+    try:
+        rel = pathlib.Path(scratch).resolve().relative_to(pathlib.Path(repo).resolve()).as_posix()
+    except ValueError:
+        rel = None                                       # scratch outside the repo: nothing to exclude
+    if rel in (None, "."):
+        return sc.dirty(repo)
+    return sc.git(repo, "status", "--short", "--", ".", f":(exclude,literal){rel}") or ""
+
+
 def check_tree(scratch, feature, repos):
     """Repo clean, on the Branch of some open ticket. Returns {repo name: current branch}."""
     cur, tickets = {}, open_tickets(scratch, feature, repos)
@@ -380,7 +392,7 @@ def check_tree(scratch, feature, repos):
             raise Stop(f"{t['name']}: repo {t['repo']} is not one of {', '.join(repos) or 'the repos'}")
     for rn in {t["repo"] for t in tickets}:
         cur[rn] = sc.git(repos[rn], "branch", "--show-current")
-        if not preflight.clean(sc.dirty(repos[rn])):
+        if not preflight.clean(repo_dirty(repos[rn], scratch)):
             raise Stop(f"{rn} has uncommitted changes")
     if tickets and not any(preflight.on_branch(cur[t["repo"]], t["branch"]) for t in tickets):
         t = tickets[0]
@@ -543,7 +555,7 @@ class Finisher:
             self.finish_entry(name, "review")
             return True
         repo = self.repos[rn]
-        if sc.git(repo, "branch", "--show-current") != br or sc.dirty(repo):
+        if sc.git(repo, "branch", "--show-current") != br or repo_dirty(repo, self.scratch):
             if name not in self.waiting:
                 self.say(f"  {nn}: finished, but {rn} is not clean on {br}; merge waits")
             self.waiting.add(name)

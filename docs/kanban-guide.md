@@ -41,7 +41,7 @@ They share the worker locks, so only one of them runs at a time. `dispatch` refu
    worktree, the same as for `dispatch`). Optional: `"run_seconds": 1800` (a run longer than this is stopped).
 2. The tickets of the feature need these header lines: `Status`, `Branch`, `Blocked by`, `Seam`, `Test command`
    (and `Repo` in a multi-repo workspace). The planner already writes them.
-3. The repo must be clean and on the feature branch (the tickets' `Branch`).
+3. The repo must be clean and on the feature branch (the tickets' `Branch`). When `.scratch` is tracked in the project repo, the planner commits it between batches as usual; the dispatcher ignores changes under it.
 
 ## 4. The planner flow, step by step
 

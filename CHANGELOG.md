@@ -6,6 +6,10 @@ mark an entry **action** when another machine must do something (re-run `link-sk
 Format: version, date, then one line per change, naming the file. **watch:** marks a change to the run files that
 hermes-dev-watch reads (`docs/watch-contract.md`).
 
+## 0.18.3 - 2026-11-01
+
+- `kit/kanban.py`: a scratch folder tracked inside the project repo is not a dirty repo; its status edits no longer block merges or the next run.
+
 ## 0.18.2 - 2026-11-01
 
 - `skills/orchestrate` 0.13.0: step 4c, the kanban dispatcher. It checks that `kit/kanban.py` exists and tells the user to
