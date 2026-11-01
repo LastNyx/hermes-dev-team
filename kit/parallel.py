@@ -124,10 +124,15 @@ def prepare_slot(repo, n, branch, base, setup, state_dir):
 
 # ------------------------------------------------------------------ run + merge (D4, D7, D8, D10)
 
+def worker_argv(ticket_path, n, extra=()):
+    """The command line of one dev worker (run_worker and kanban.py start the same thing)."""
+    return [sys.executable, "-u", str(KIT / "run-worker.py"), "dev", f"ticket: {pathlib.Path(ticket_path).as_posix()}",
+            "--slot", str(n), *extra]
+
+
 def run_worker(slot, n, ticket_path, cfg_file, repo_name, extra, results, i):
     env = {**os.environ, "HDT_CONFIG": str(cfg_file), "HDT_SLOT_OF": repo_name, "PYTHONUNBUFFERED": "1"}
-    cmd = [sys.executable, "-u", str(KIT / "run-worker.py"), "dev", f"ticket: {pathlib.Path(ticket_path).as_posix()}",
-           "--slot", str(n), *extra]
+    cmd = worker_argv(ticket_path, n, extra)
     p = subprocess.run(cmd, cwd=slot, capture_output=True, text=True, env=env, encoding="utf-8", errors="replace")
     lines = [l for l in (p.stdout or "").splitlines() if l.startswith("RESULT ")]
     results[i] = lines[-1] if lines else f"RESULT dev FAIL launcher exited {p.returncode}: " + \

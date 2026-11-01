@@ -71,6 +71,7 @@ import plannerlog as pl  # noqa: E402
 import tickets as tk  # noqa: E402
 import parallel  # noqa: E402
 import scratch as sc  # noqa: E402
+import preflight  # noqa: E402
 
 COLUMNS = [("todo", "Todo"), ("in-progress", "In progress"), ("review", "Review"), ("blocked", "Blocked"),
            ("done", "Done")]
@@ -144,20 +145,18 @@ def collect(scratch, feats):
         files = sorted((scratch / feat / "issues").glob("*.md"))
         texts = {p: p.read_text(encoding="utf-8", errors="replace") for p in files}
         fields = {p: {"Status": tk.field(t, "Status")} for p, t in texts.items()}
-        # a blocker in `review` is already merged into the feature branch (only the planner's review sets `done`, which
-        # nothing in this loop waits for), so it releases its dependents; otherwise `Blocked by` would never open
-        eff = {p: {"Status": "done" if f["Status"] == "review" else f["Status"]} for p, f in fields.items()}
         by_num = {}
         for p in files:
-            by_num.setdefault(tk.number(p), []).append((p, eff[p]))
+            by_num.setdefault(tk.number(p), []).append((p, fields[p]))
         for p in files:
             text = texts[p]
             status = fields[p]["Status"]
             if status not in out:
                 continue
-            bl = re.findall(r"\b\d+[a-z]?\b", tk.field(text, "Blocked by") or "", re.I) \
-                if not (tk.field(text, "Blocked by") or "none").lower().startswith("none") else []
-            open_b = [b for b in bl if not tk.blocker_done(tk.ticket_id(b), p, by_num)]
+            bl = tk.blocker_tokens(tk.field(text, "Blocked by") or "none")
+            # a blocker in `review` is already merged into the feature branch (only the planner's review sets `done`,
+            # which nothing in this loop waits for), so it releases its dependents (K5)
+            open_b = tk.open_blockers(tk.field(text, "Blocked by"), p, by_num, ("done", "review"))
             lock = next((d for d in locks if pathlib.PurePath(str(d.get("ticket") or "")).name == p.name), None)
             prog = []
             if lock and lock.get("stamp") and lock.get("role"):
@@ -326,8 +325,7 @@ def release_lock(scratch):
 
 def worker_argv(ticket_path, n):
     """Same command line as parallel.run_worker builds."""
-    return [sys.executable, "-u", str(parallel.KIT / "run-worker.py"), "dev", f"ticket: {pathlib.Path(ticket_path).as_posix()}",
-            "--slot", str(n)]
+    return parallel.worker_argv(ticket_path, n)
 
 
 def used_slots(scratch, children, fin=None):
@@ -345,19 +343,16 @@ def check_run(a, say=print):
     """Preconditions, like scratch.py dispatch. Returns (tc, scratch, repos, cap) or raises Stop."""
     tc, scratch, repos = sc.ctx()
     cfg = tc["cfg"]
-    if tc["source"] is None:
+    if not preflight.has_config(tc):
         raise Stop("no .team.json found (run it from the project repo root)")
     if not scratch.is_dir():
         raise Stop(f"no scratch folder {scratch.as_posix()}")
     if not (scratch / a.feature / "issues").is_dir():
         raise Stop(f"no tickets in {(scratch / a.feature / 'issues').as_posix()}")
-    try:
-        mw = int(cfg.get("max_workers") or 0)
-    except (TypeError, ValueError):
-        mw = 0
+    mw = preflight.max_workers(cfg)
     if mw < 1:
         raise Stop(".team.json has no max_workers >= 1 (set it, at most 3)")
-    if not cfg.get("setup"):
+    if not preflight.has_setup(cfg):
         raise Stop(".team.json has no `setup` (the commands that install dependencies in a fresh worktree)")
     if a.interval <= 0:
         raise Stop("--interval must be a positive number of seconds")
@@ -385,9 +380,9 @@ def check_tree(scratch, feature, repos):
             raise Stop(f"{t['name']}: repo {t['repo']} is not one of {', '.join(repos) or 'the repos'}")
     for rn in {t["repo"] for t in tickets}:
         cur[rn] = sc.git(repos[rn], "branch", "--show-current")
-        if sc.dirty(repos[rn]):
+        if not preflight.clean(sc.dirty(repos[rn])):
             raise Stop(f"{rn} has uncommitted changes")
-    if tickets and not any(t["branch"] == cur[t["repo"]] for t in tickets):
+    if tickets and not any(preflight.on_branch(cur[t["repo"]], t["branch"]) for t in tickets):
         t = tickets[0]
         raise Stop(f"{t['repo']} is not on {t['branch']}")
     return cur
@@ -804,27 +799,8 @@ def cmd_run(a):
 
 # ------------------------------------------------------------------ stop, pause, resume, service (K4)
 
-def proc_cmdline(pid):
-    """Command line of a process as one string, or None when it cannot be read (then nothing is signalled)."""
-    try:
-        return pathlib.Path(f"/proc/{int(pid)}/cmdline").read_bytes().replace(b"\0", b" ").decode("utf-8", "replace")
-    except (OSError, ValueError):
-        pass
-    if sys.platform == "win32":
-        return None
-    try:
-        r = subprocess.run(["ps", "-p", str(int(pid)), "-o", "args="], capture_output=True, text=True, timeout=10)
-        return r.stdout.strip() or None
-    except (OSError, ValueError, subprocess.SubprocessError):
-        return None
-
-
-def read_dispatcher(scratch):
-    try:
-        d = json.loads(lock_file(scratch).read_text(encoding="utf-8"))
-        return d if isinstance(d, dict) else None
-    except (OSError, ValueError):
-        return None
+proc_cmdline = teamcfg.proc_cmdline                          # shared with scratch.py (teamcfg.dispatcher_alive)
+read_dispatcher = teamcfg.read_dispatcher
 
 
 def wait_until(cond, secs):

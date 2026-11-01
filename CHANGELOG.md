@@ -6,6 +6,18 @@ mark an entry **action** when another machine must do something (re-run `link-sk
 Format: version, date, then one line per change, naming the file. **watch:** marks a change to the run files that
 hermes-dev-watch reads (`docs/watch-contract.md`).
 
+## 0.18.1 - 2026-11-01
+
+- **One blocker rule** (`kit/tickets.py` `open_blockers`): `kanban.py` and `scratch.py dispatch` both treat a blocker in
+  `review` as done (it is already merged into the feature branch). Before, `dispatch` refused a ticket whose blocker was in review.
+- **One `field()`**: `scratch.py` uses `tickets.field` instead of its own copy.
+- **One preflight** (`kit/preflight.py`): the `max_workers`, `setup`, `.team.json`, clean-tree and on-Branch tests are shared by
+  `scratch.py dispatch` and `kanban.py run`; messages and prefixes are unchanged.
+- **`scratch.py resume` respects the dispatcher**: with a live `runs/dispatcher.lock` it prints `RESUME OK dispatcher running ...`
+  and touches no lock, branch, ticket or git state; a stale dispatcher lock is left alone and mentioned in one line.
+  `scratch.py dispatch` refuses with `DISPATCH STOP a kanban dispatcher is running (pid N)`. `teamcfg.dispatcher_alive` is the one check.
+- `parallel.worker_argv` builds the worker command line for `run_worker` and `kanban.py`. New test `tests/kit_shared.py`.
+
 ## 0.18.0 - 2026-11-01
 
 - **Kanban dispatcher** (opt-in; grill log `docs/open/kanban-dispatcher.md` D1-D9). Nothing changes unless you run
