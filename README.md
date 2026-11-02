@@ -1,24 +1,26 @@
 # hermes-dev-team
 
 A small dev team for [Hermes Agent](https://hermes-agent.nousresearch.com/docs): you talk to a planner in Hermes, and it
-starts headless workers (dev, reviewer, docs, researcher) one at a time, on
-[Claude Code](https://docs.anthropic.com/en/docs/claude-code) or, without Claude, on a Hermes worker profile. On Claude
-each worker runs under a deny-by-default allow-list; on both backends the launcher checks the repo after every run, so
-a worker that switched branches, pushed or rewrote history FAILs.
+starts workers (dev, reviewer, docs, researcher) one at a time as Hermes `delegate_task` subagents. The kit writes each
+worker's brief before the run and checks the repo after it, so a worker that switched branches, pushed, rewrote
+history, edited a protected file or changed a Hermes skill FAILs.
 
-**Status:** the kit has run end to end on a toy repo (dev, reviewer and docs all PASS) and blocked 8 of 8 forbidden
-actions; see [docs/design.md](docs/design.md). The researcher passed a planted-instruction test and a real run on
-a public repo (0.13.0). It has not yet been used on a real project.
+**Status (1.0.0):** workers moved from `claude -p` to Hermes subagents. Real chat runs on toy repos: a dev ticket PASS
+(Sonnet, 31 s), a dev that refused 5 planted forbidden steps and still built the ticket, a researcher that reported a
+source's planted instructions without following them, and an interrupted run finished by resume
+([docs/testing.md](docs/testing.md)). The last version with the `claude -p` backend is tag `v0.18.3`.
 
 ## What is here
 
 - [TEAM.md](TEAM.md): the roles on one page.
-- `kit/run-worker.py`: the launcher and its after-run guards. `kit/backends.py`: everything backend-specific (claude,
-  hermes). `kit/roles/<role>.md` + `<role>.json`: each worker's prompt and Claude allow-list.
-- `kit/scratch.py`: resume in a new session or on another machine, force-stop a worker, switch machines.
+- `kit/run-worker.py`: `prepare` (config check, lock, snapshots, the worker's brief and the `delegate_task` task) and
+  `finish` (after-run guards, `runs.log`, the RESULT line). `kit/roles/<role>.md`: each worker's prompt;
+  `_tool-rules.md`: the rules every brief ends with.
+- `kit/scratch.py`: resume in a new session or on another machine, finish a stopped or interrupted run, switch
+  machines, parallel dev groups.
 - `kit/research.py`: the research home (clone a repo to study, create a topic, delete the clone when done).
-- `skills/orchestrate`: the planner's one Hermes skill. Backend notes for maintainers: [docs/backend-claude.md](docs/backend-claude.md),
-  [docs/backend-hermes.md](docs/backend-hermes.md).
+- `skills/orchestrate`: the planner's one Hermes skill. Worker notes for maintainers:
+  [docs/backend-delegate.md](docs/backend-delegate.md).
 - Planning uses [Matt Pocock's skills](https://github.com/mattpocock/skills) as-is, installed from the Hermes skill hub
   (not vendored, so they keep updating): grill-with-docs, grilling, domain-modeling, to-tickets.
 - [LEARN.md](LEARN.md): a prompt to paste into Hermes on another machine so it installs and learns this repo.
@@ -31,9 +33,8 @@ a public repo (0.13.0). It has not yet been used on a real project.
 
 ## Requirements
 
-Claude Code 2.1.296 or newer, logged in (`claude auth login`) or `ANTHROPIC_API_KEY` set; Python 3; git; Hermes
-Agent for the planner. Without Claude, workers fall back to a Hermes worker profile (see Backends below).
-This repo holds no credentials.
+Hermes Agent with the `delegate_task` tool and model options in its `delegation` config (e.g. fast, standard, deep);
+Python 3; git. This repo holds no credentials.
 
 ## Install
 
@@ -44,15 +45,20 @@ the skills, saves the kit path to memory, and runs a smoke test. By hand:
 2. `python KIT/link-skills.py` (dry run), then `python KIT/link-skills.py --apply`. It links the team skills and
    prints a `MISSING` line with the install command for each of Matt's skills you do not have:
    `hermes skills install skills-sh/mattpocock/skills/<name> --yes` for grill-with-docs, grilling, domain-modeling, to-tickets.
-3. In a project repo, on a feature branch:
-   `python KIT/run-worker.py dev "ticket: .scratch/<feature>/issues/01-x.md" --test-cmd "<test command>"`
-   prints one line, for example `RESULT dev PASS 6397d42 | turns=18 22s denials=0 | .scratch/runs/....json`.
+3. In a project repo, on a feature branch, the planner runs three steps per worker:
+   `python KIT/run-worker.py prepare dev "ticket: .scratch/<feature>/issues/01-x.md"` prints a `DELEGATE {...}` line;
+   the planner passes it to `delegate_task`; when the subagent returns, its answer goes into
+   `python KIT/run-worker.py finish <run-id>`, which prints one line, e.g.
+   `RESULT dev PASS 43071b7 | option=standard model=claude-sonnet-5-5 enforce=prompt-only api_calls=7 31s ...`.
 
-Each project needs a committed `.team.json`, e.g. `{"test": "npm test"}` (optional `"models": {"docs": "haiku"}`,
-`"protected": ["<file-name glob>"]`). The dev worker can never edit `package.json`, lockfiles, jest/vitest/tsconfig
-files or `.team.json` (they decide what the test command runs); the planner makes those changes.
-The launcher pastes the project's `AGENTS.md` and `CLAUDE.md` (whichever exist, in that order; `@` imports inlined,
-each file once) into every worker's prompt; `"rules": "<file or list>"` replaces that default. START shows `rules=...`.
+Each project needs a committed `.team.json` with its tests and a model option per role, e.g.
+`{"test": "npm test", "options": {"dev": "standard", "reviewer": "standard", "docs": "fast", "researcher": "standard"}}`
+(optional `"protected": ["<file-name glob>"]`). `prepare` refuses a project without `options` (or with the old
+`backend`/`models`/`hermes_*`/`effort` keys) and prints the replacement. The dev worker must never edit
+`package.json`, lockfiles, jest/vitest/tsconfig files or `.team.json` (they decide what the test command runs); the
+planner makes those changes, and `finish` FAILs a run that touched them.
+`prepare` pastes the project's `AGENTS.md` and `CLAUDE.md` (whichever exist, in that order; `@` imports inlined,
+each file once) into every brief; `"rules": "<file or list>"` replaces that default. PREPARED shows `rules=...`.
 The dev worker takes its test command from the ticket; the reviewer uses `test` from `.team.json`.
 Extra changelogs: name each one and its rules (file, language, audience) in `AGENTS.md`; the docs worker follows them.
 It may edit only README, `CHANGELOG.md` and `docs/`, so list any other file in `"docs_edit": ["<repo-relative path>"]`.
@@ -66,14 +72,14 @@ A long rules file is cut at `rules_max_chars` (default 40000); point `rules` at 
 run from the root.
 
 ```json
-{"test": "npm test"}
+{"test": "npm test", "options": {"dev": "standard", "reviewer": "standard", "docs": "fast", "researcher": "standard"}}
 ```
 
 **Monorepo** (one git repo, several packages). Same as a single repo: one `.team.json` at the root, workers run from
 the root, one feature branch.
 
 ```json
-{"test": "pnpm -r test", "protected": ["vitest.workspace.*"]}
+{"test": "pnpm -r test", "options": {"dev": "standard", "reviewer": "standard", "docs": "fast"}, "protected": ["vitest.workspace.*"]}
 ```
 
 - `test` is the full suite (the reviewer runs it through `kit/suites.py`). Several suites in different folders go in a
@@ -94,6 +100,7 @@ the root, one feature branch.
   "scratch": ".scratch",
   "rules": "worker-rules.md",
   "glossary": "CONTEXT.md",
+  "options": {"dev": "standard", "reviewer": "standard", "docs": "fast", "researcher": "standard"},
   "repos": {"api": {"test": "yarn typecheck"}, "web": {"test": "yarn typecheck"}}
 }
 ```
@@ -106,8 +113,8 @@ the root, one feature branch.
 - Merge order is yours: the upstream repo first (e.g. `api` before `web`).
 - `scratch.py` and `tickets.py` find the workspace config from inside any of its repos.
 
-Every run appends one line to `.scratch/runs.log` (turns, seconds, tokens, list price, denials), which
-[hermes-dev-watch](https://github.com/LastNyx/hermes-dev-watch) shows live.
+Every run appends one line to `.scratch/runs.log` (model, API calls, seconds, verdict, the subagent's transcript
+path). Watch a worker live in Hermes' subagent view.
 Commits never get a Co-Authored-By trailer.
 
 ## Research
@@ -115,7 +122,7 @@ Commits never get a Co-Authored-By trailer.
 Ask the planner how some code works, whether a repo is worth learning, or to search a whole repo ("every place that
 does X"): it writes 3-6 questions or a survey scope, you approve them, and a read-only `researcher` worker answers
 with `path:line` citations and a coverage list (folders read and skipped) in one findings file (never running the
-source's code or git; its numbers are "claimed, not run"). It runs on either backend. The planner gives the recommendation. Research outside a
+source's code or git; its numbers are "claimed, not run"). The planner gives the recommendation. Research outside a
 project lives in a research home: `HDT_RESEARCH_HOME`, else `~/research` (keep it out of OneDrive, AppData, and
 paths with spaces); `python KIT/research.py init`, `clone <url>`, `topic <name>`, `done <name>`. See the orchestrate
 skill's `references/research.md`.
@@ -127,34 +134,6 @@ If other people commit to the repo with their own workflow, the kit stays your p
 scratch folder, run `python KIT/scratch.py baseline <feature>` before the first ticket, and bring main in only between
 batches with `python KIT/scratch.py sync-main --apply`. See the orchestrate skill's `references/shared-repo.md`.
 
-## Kanban dispatcher
-
-**This is the dev-kit's own dispatcher, not Hermes' built-in `hermes kanban`.** Hermes' kanban spawns `hermes` workers from its own
-database (`~/.hermes/kanban.db`); this one runs the kit's Claude Code workers from the ticket files and has nothing to do
-with that database.
-
-Opt-in. `kit/kanban.py` keeps up to `max_workers` (at most 3) dev workers busy from the ticket files of one feature and
-shows them as a board. The ticket files stay the only source of truth; there is no database. Run it from the project
-repo root:
-
-| Command | Does |
-|---|---|
-| `kanban.py board [--feature F] [--json]` | tickets by Status, with running progress (read-only) |
-| `kanban.py status [--json]` | dispatcher running or not, workers, pause |
-| `kanban.py run <feature>` | the loop: start ready tickets, merge PASS branches, mark `review` / `blocked` |
-| `kanban.py stop [--now]` | graceful (finish running workers, start none) or `--now` (stop workers, tickets back to `todo`) |
-| `kanban.py pause [--minutes N]` / `resume` | nothing starts until the pause ends; running workers go on |
-| `kanban.py service <feature>` | prints the `systemd-run --user` line that starts `run` (installs nothing) |
-
-The systemd template `kit/systemd/hdt-kanban@.service` is UNVERIFIED (`systemd-analyze verify` fails with "Failed to setup
-working directory"); the supported start is `kanban.py service <feature>` (a `systemd-run --user` line).
-
-Safe start: `python <kit>/kanban.py run <feature> --dry-run`, then run the `service` line it prints so the loop outlives
-the chat's background jobs. `scratch.py dispatch` is unchanged; the two share the worker locks and refuse to run together.
-
-Not in v1: several features at once, automatic reviewers or fix tickets, writes from the board. Design:
-`docs/open/kanban-dispatcher.md`.
-
 ## Talking to the planner
 
 Plain words in the planner chat; nothing else to remember.
@@ -165,17 +144,17 @@ Plain words in the planner chat; nothing else to remember.
 | "build" / "go" (tickets approved) | starts the loop: dispatch, verify, review, docs, one ticket at a time |
 | "go with recommendation" / "agree" | takes the answer it recommended and logs it with `scratch.py decide` |
 | "keep going" / "decide yourself" / "continue till finish" | logs a `delegated:` decision, then runs the whole queue without asking: more review rounds, small fixes done itself; stops only for merge, push or a real-account step, and reports once at the end |
-| "stop the worker" | `scratch.py stop` (never a raw process kill) |
+| "stop the worker" | stops the subagent, then `scratch.py stop` finishes the run as force-stopped |
 | "switching" | `scratch.py switch`: pushes the scratch repo and feature branch for your other machine |
 | "merge" | nothing: it tells you the branch is ready; you run `git merge --no-ff` |
 
 Small changes are routed by size on their own (`references/lanes.md`): a trivial fix the planner does itself inside
 `scratch.py check-run`, a small one is a quick-lane ticket, anything larger the full lane. You don't need to ask.
 
-**One worker at a time, unless the project turns on parallel dev (0.17.0).** With `"max_workers": 2` (and a `setup`
-list) in `.team.json`, the planner runs independent dev tickets of one batch together with `scratch.py dispatch
-<feature> 01 02`: each in its own pool worktree (`<repo>.w1`, `.w2`), merged back into the feature branch in ticket
-order. Tickets whose Seams name the same file are refused and run one after another. Reviews, docs and the researcher
+**One worker at a time, unless the project turns on parallel dev.** With `"max_workers": 2` (at most 3, and a `setup`
+list) in `.team.json`, the planner runs independent dev tickets of one batch together: `scratch.py dispatch <feature>
+01 02` prepares each in its own pool worktree (`<repo>.w1`, `.w2`), the planner starts the subagents in one
+`delegate_task` call, and `scratch.py merge <feature>` merges them back into the feature branch in ticket order. Tickets whose Seams name the same file are refused and run one after another. Reviews, docs and the researcher
 stay serial. Without `max_workers` nothing changes: the lock refuses a second worker and "keep going" runs a queue.
 Design: [docs/open/parallel-workers.md](docs/open/parallel-workers.md).
 
@@ -190,7 +169,7 @@ python KIT/scratch.py init --remote <private-url>   # once per project; you crea
 python KIT/scratch.py resume                        # step 0, run by the planner: ff-only pull + state report
 python KIT/scratch.py switch                        # you say "switching": push scratch + feature branch(es)
 python KIT/scratch.py init --clone <private-url>    # first time on the other machine
-python KIT/scratch.py stop                          # force-stop the running worker
+python KIT/scratch.py stop                          # after stopping the subagent: finish its run as force-stopped
 python KIT/scratch.py status <feature> NN review --verify "PASS: ..."   # planner: Status + Verify, logged
 python KIT/scratch.py decide <feature> "<what you decided>"             # planner: a chat decision, logged
 python KIT/scratch.py baseline <feature>                                # before the first ticket: what already fails, by test name
@@ -203,55 +182,28 @@ A project that used the kit before 0.11.0: follow [EXISTING-PROJECTS.md](EXISTIN
 - `resume` sorts each `in-progress` ticket: a dev commit for it exists -> verify; no commit and a clean tree ->
   redispatch; a dirty tree -> ask you. It never resets, stashes, merges or rebases; if both machines committed, it
   stops and shows both sides.
+- A subagent dies with `/new` or a closed app. The next `resume` reports `INTERRUPTED <ticket>` and finishes that run
+  (guards checked) before sorting the ticket as above.
 - `switch` is the only push an agent makes: never main, never `--force`, never while a worker runs, never with
   uncommitted product changes (you discard them or commit a WIP yourself).
-- `runs/` (result JSON, progress logs) is not carried; `runs.log` is.
+- `runs/` (briefs, run state, result JSON) is not carried; `runs.log` is.
 
-## Backends
+## Workers
 
-Workers run on Claude Code (`claude -p`) whenever it is logged in or `ANTHROPIC_API_KEY` is set. Otherwise, or when
-`.team.json` says so, they run as a headless Hermes session in a dedicated worker profile, on any model Hermes can
-reach. The dispatch command is the same; the launcher picks.
+Each worker is a Hermes `delegate_task` subagent on the model option `.team.json` names for its role. Nothing blocks a
+subagent while it runs (`enforce=prompt-only`): its brief says what it may do, and `finish` checks afterwards.
 
-| | claude (default) | hermes (fallback) |
-|---|---|---|
-| Blocked while running | deny-by-default allow-list | nothing: prompt rules only (`enforce=prompt-only`) |
-| Caught after the run | main moved, branch changed, history rewritten, protected file changed, git hooks/config changed, pushed; researcher: source changed, extra file written | the same |
-| Not caught | - | a write outside the repo; a checkout that switches back |
-| Model | `models` (`sonnet`, `haiku`) | `hermes_models` (the provider's full id), else the profile default |
-| Effort | `effort` -> `--effort` | `effort` -> `--reasoning` |
-| Cost in `runs.log` | list price | tokens only (`list$=None`) |
+| | |
+|---|---|
+| Caught after the run | main moved, branch changed, history rewritten, protected file changed, git hooks/config changed, pushed, a Hermes skill changed; researcher: source changed, extra file written; parallel slot: the main checkout changed |
+| Not caught | a write outside the repo, scratch, source and skills folders; a checkout that switches back |
+| Model | `options` per role (your `delegation` options, e.g. fast/standard/deep); `prepare --option` per run |
+| Cost in `runs.log` | API calls and seconds; no tokens or price |
+| Lifetime | the chat: `/new` or closing the app kills a running subagent; `resume` finishes its run |
 
-`python tests/backend_smoke.py` runs one trivial ticket on each backend that is set up (it calls a model): run it on a
-new machine and after a kit change, so the fallback is known to work before you need it.
-
-Every key is optional; a project needs only `test`. Full example:
-
-```json
-{
-  "test": "npm test",
-  "backend": "auto",
-  "models": {"dev": "sonnet", "reviewer": "sonnet", "docs": "haiku"},
-  "hermes_models": {"dev": "claude-sonnet-5-5", "docs": "claude-haiku-5-5"},
-  "hermes_provider": "anthropic",
-  "hermes_profile": "hdt-worker",
-  "effort": "medium"
-}
-```
-
-`backend` is `auto`, `claude`, `hermes`, or a per-role map like `{"docs": "hermes"}`. `effort` may also be a map.
-
-One-time Hermes setup per machine (only if you use the hermes backend; the launcher prints these when the profile is
-missing and never edits Hermes config itself):
-
-```
-hermes profile create hdt-worker --no-skills --no-alias
-hermes -p hdt-worker model                    # provider + default model for workers
-hermes -p hdt-worker chat -q "reply OK" -Q    # first run installs dependencies (slow once)
-```
-
-Worker sessions are tagged `--source tool` and stay in that profile, out of your chat list. Each run also makes one
-small title-generation call that `runs.log` does not count.
+Details and measurements: [docs/backend-delegate.md](docs/backend-delegate.md). The `claude -p` and headless
+`hermes -p` backends, the kanban dispatcher and the hermes-dev-watch run-file contract were removed in 1.0.0; tag
+`v0.18.3` has them.
 
 ## When a skill grows
 

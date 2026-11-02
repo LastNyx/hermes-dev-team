@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 """The planner's trail: one `runs.log` line with role `planner` per `scratch.py status` and `decide`. No model call.
 
-A planner line has the same shape as a worker's (docs/watch-contract.md), so hermes-dev-watch lists it next to the
-worker runs:
+A planner line has the same shape as a worker's (docs/design.md "runs.log"), so it reads next to the worker runs:
 
     <stamp> planner planner <verdict> turns=- <secs>s out=None list$=None denials=0 - feature= test=- in=None
     cw=None cr=None repo= backend=- ticket= action=<status|decide> fmt=
 
 Verdicts: `PASS|FAIL|SKIP verify NN: <text>` for a status change with `--verify`, `NOTE status NN <status>` or
 `NOTE decide: <text>` otherwise, so a NOTE never counts as a pass. `<secs>` is the time since the feature's previous
-planner line, 0 for the first one or after a gap of more than GAP_HOURS (a new session). There is no progress log.
+planner line, 0 for the first one or after a gap of more than GAP_HOURS (a new session).
 """
 import datetime, pathlib, re, sys
 
@@ -111,7 +110,7 @@ def log(scratch, feature, verdict, action, ticket=None, repo=None, now=None):
                       "-", f"feature={feature}", "test=-", "in=None", "cw=None", "cr=None",
                       f"repo={repo or '-'}", "backend=-", f"ticket={ticket or '-'}", f"action={action}",
                       f"fmt={teamcfg.RUN_FORMAT}"])
-    # ^ docs/watch-contract.md: the first six fields never move; keys are read by name; fmt stays last
+    # ^ docs/design.md "runs.log": the first six fields never move; keys are read by name
     with open(scratch / "runs.log", "a", encoding="utf-8") as f:
         f.write(line + "\n")
     return f"{stamp}-{ROLE}"

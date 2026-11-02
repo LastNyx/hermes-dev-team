@@ -4,10 +4,9 @@
     python tests/planner_log.py [--keep]
 
 Builds a throwaway repo with a scratch repo and four tickets, then drives `status` and `decide` and checks what they
-write (ticket, decisions.md, runs.log, scratch commits); with HDW_CORE pointing at hermes-dev-watch's core.py, the
-watcher's own reader on the planner lines. Last line: `<n>/<total> checks passed`. See docs/testing.md.
+write (ticket, decisions.md, runs.log, scratch commits). Last line: `<n>/<total> checks passed`. See docs/testing.md.
 """
-import importlib.util, json, os, pathlib, re, shutil, subprocess, sys, tempfile
+import json, os, pathlib, re, shutil, subprocess, sys, tempfile
 
 KIT = pathlib.Path(__file__).resolve().parent.parent / "kit"
 ROOT = pathlib.Path(tempfile.mkdtemp(prefix="hdt-planner-log-")).resolve()
@@ -163,16 +162,6 @@ def run():
     check("first planner line 0s; later ones the time since the previous (0..120s here)",
           rows[0][5] == "0s" and all(re.fullmatch(r"\d+s", f[5]) and int(f[5][:-1]) <= 120 for f in rows),
           [f[5] for f in rows])
-
-    core = os.environ.get("HDW_CORE")
-    if core and pathlib.Path(core).is_file():
-        spec = importlib.util.spec_from_file_location("hdw_core", core)
-        c = importlib.util.module_from_spec(spec); spec.loader.exec_module(c)
-        runs = c.runs_log(SCRATCH)
-        mine = {k: v for k, v in runs.items() if k.endswith("-planner")}
-        check("hermes-dev-watch reads every planner line", len(mine) == len(rows), (len(mine), len(rows)))
-    else:
-        print("INFO  HDW_CORE not set: hermes-dev-watch's reader not run on the planner lines")
 
 
 def main():

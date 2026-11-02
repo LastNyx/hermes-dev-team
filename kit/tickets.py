@@ -81,7 +81,7 @@ def blocker_done(b, waiting, groups, done_states=("done",)):
 
 
 def open_blockers(value, waiting, by_num, done_states=("done",)):
-    """THE blocker rule (kanban.collect and scratch.py dispatch both call it): the ids in the `Blocked by` value that
+    """THE blocker rule (scratch.py dispatch calls it): the ids in the `Blocked by` value that
     are NOT done, as written in the value. `waiting` is the waiting ticket's path, `by_num` maps ticket_id -> [(path,
     {"Status": ...})] for every ticket of the feature (see blocker_done for lettered and fix tickets). A blocker is done
     when its Status is in `done_states`; both commands pass ("done", "review") because a ticket in review is already

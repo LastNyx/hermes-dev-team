@@ -8,35 +8,28 @@ Lookup, from the repo root (or any folder):
    overrides them per repo. Scratch defaults to <workspace>/.scratch.
 Relative paths in a config resolve from the folder the config file sits in.
 
-Keys: test (a command string, or a list of {name, cmd, cwd} suites run by suites.py), models, protected (as before), docs_edit (repo-relative files the docs worker may also edit), shared (true: other people work in the repo; see orchestrate),
-scratch (folder for tickets, reviews, runs), rules (file or list of files
-pasted into every worker prompt; default: the repo's AGENTS.md and CLAUDE.md, whichever exist, in that order), rules_max_chars (default 40000), path (folders put in
-front of PATH for the worker, e.g. ["~/.local/bin"]), max_workers (parallel dev workers for `scratch.py dispatch`, default
-1 = serial), setup (list of {cmd, cwd} that install dependencies in a fresh pool worktree; required when max_workers > 1).
+Keys: test (a command string, or a list of {name, cmd, cwd} suites run by suites.py), options (delegate model option per
+role, required: {"dev": "standard", ...}), protected, docs_edit (repo-relative files the docs worker may also edit),
+shared (true: other people work in the repo; see orchestrate), scratch (folder for tickets, reviews, runs), rules (file
+or list of files pasted into every worker brief; default: the repo's AGENTS.md and CLAUDE.md, whichever exist, in that
+order), rules_max_chars (default 40000), path (folders the worker puts in front of PATH, e.g. ["~/.local/bin"]),
+max_workers (parallel dev workers for `scratch.py dispatch`, at most 3, default 1 = serial), setup (list of {cmd, cwd}
+that install dependencies in a fresh pool worktree; required with max_workers).
 
-Worker lock: while a worker runs, the launcher keeps <scratch>/runs/worker.lock (JSON: launcher pid, worker pid, role,
-ticket, stamp). A worker started by `scratch.py dispatch` in pool slot N keeps runs/slot-N.lock instead (0.17.0). A
-serial run refuses while any lock is live; a slot run refuses while worker.lock or its own slot lock is live.
+Worker lock: from `run-worker.py prepare` until `finish`, <scratch>/runs/worker.lock (JSON: run_id, role, ticket,
+prepared time). A run prepared by `scratch.py dispatch` for pool slot N keeps runs/slot-N.lock instead. A serial run is
+refused while any lock exists; a slot run while worker.lock or its own slot lock exists.
 
-Pool worktrees (0.17.0): `scratch.py dispatch` runs workers in sibling worktrees `<repo>.w1`, `<repo>.w2`, ... and tells
-the launcher where the real config is with HDT_CONFIG (the config file) and HDT_SLOT_OF (the repo's folder name), so a
-slot uses the main checkout's config and scratch folder.
+Pool worktrees: `scratch.py dispatch` prepares runs in sibling worktrees `<repo>.w1`, `<repo>.w2`, ... and tells the
+launcher where the real config is with HDT_CONFIG (the config file), HDT_SLOT_OF (the repo's folder name) and
+HDT_MAIN_CHECKOUT (the main checkout), so a slot uses the main checkout's config and scratch folder.
 """
-import json, os, pathlib, subprocess, sys
+import json, os, pathlib, re, time
 
 RULES_MAX_CHARS = 40000
 
-# Format of runs.log, runs/<stamp>-<role>.progress.log and runs/*.lock, which an outside reader (hermes-dev-watch)
-# parses; see docs/watch-contract.md. Bump only on a change an old reader would misread; additive changes keep it.
+# Format of runs.log lines (docs/design.md "runs.log"). Positions 1-6 are fixed; keys after them are read by name.
 RUN_FORMAT = 1
-
-# `-c` overrides for every git command the kit runs for a worker's read-only git (git-ro.py); the kit runs no git on a
-# research source at all. Measured (git 2.53 Windows): a source's own config ran a program on plain `git log` (gpg.program via
-# log.showSignature or %G?), `git diff` (diff.external, core.fsmonitor, a textconv or external driver from
-# info/attributes); with these plus `--no-ext-diff --no-textconv` none ran.
-GIT_SAFE = ("-c", "log.showSignature=false", "-c", "diff.external=", "-c", "core.fsmonitor=false",
-            "-c", "gpg.program=hdt-no-gpg", "-c", "gpg.ssh.program=hdt-no-gpg", "-c", "gpg.x509.program=hdt-no-gpg",
-            "-c", "core.pager=cat", "--no-pager")
 
 
 def _read(p):
@@ -79,117 +72,124 @@ def load(folder=None):
             "rules_max_chars": int(cfg.get("rules_max_chars", RULES_MAX_CHARS))}
 
 
-def pid_alive(pid):
-    """True when a process with this pid is running. Never signals it (os.kill(pid, 0) TERMINATES it on Windows)."""
+def hermes_home():
+    if os.environ.get("HERMES_HOME"):
+        return pathlib.Path(os.environ["HERMES_HOME"]).expanduser()
+    la = os.environ.get("LOCALAPPDATA")
+    if la and (pathlib.Path(la) / "hermes").is_dir():
+        return pathlib.Path(la) / "hermes"
+    return pathlib.Path.home() / ".hermes"
+
+
+# ------------------------------------------------------------------ delegate children (1.0.0)
+#
+# A worker is a Hermes `delegate_task` child the planner starts in chat. The kit cannot start, watch or kill it; it finds
+# it afterwards through Hermes' live transcripts: <hermes home>/cache/delegation/live/<delegation id>/manifest.json lists
+# each task's goal, status (running, completed, failed, interrupted, ...), model and transcript path. prepare puts
+# `GOAL_TAG <run id>` at the start of the goal, so the run id finds its child. Hermes prunes those folders after 7 days.
+
+GOAL_TAG = "[hdt]"
+STALE_SECS = 2 * 3600       # D12/D17: a run with no sign of life for this long is interrupted
+DISPATCH_SECS = 600         # a prepared run with no child yet is "prepared" for this long, then interrupted
+
+
+def _ts(s):
     try:
-        pid = int(pid)
+        return time.mktime(time.strptime(s, "%Y-%m-%d %H:%M:%S"))
     except (TypeError, ValueError):
-        return False
-    if pid <= 0:
-        return False
-    if sys.platform == "win32":
-        import ctypes
-        k = ctypes.windll.kernel32
-        h = k.OpenProcess(0x1000, False, pid)           # PROCESS_QUERY_LIMITED_INFORMATION
-        if not h:
-            return False
-        code = ctypes.c_ulong()
-        ok = k.GetExitCodeProcess(h, ctypes.byref(code))
-        k.CloseHandle(h)
-        return bool(ok) and code.value == 259           # STILL_ACTIVE
-    try:
-        os.kill(pid, 0)
-        return True
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
+        return None
+
+
+def child_of(run_id, transcript=None):
+    """The delegate child of a run: {status, model, log, started_ts, ended_ts} from the newest manifest whose task goal
+    names the run id; None when there is none (not dispatched yet, pruned, or another machine)."""
+    live = hermes_home() / "cache" / "delegation" / "live"
+    best = None
+    for mf in live.glob("*/manifest.json") if live.is_dir() else []:
+        try:
+            m = json.loads(mf.read_text(encoding="utf-8-sig"))
+        except (OSError, ValueError):
+            continue
+        for t in m.get("tasks") or []:
+            if f"{GOAL_TAG} {run_id}" in str(t.get("goal") or "") or (transcript and t.get("log") == transcript):
+                c = {"status": t.get("status"), "model": t.get("model") or m.get("model"), "log": t.get("log"),
+                     "started_ts": _ts(m.get("started")), "ended_ts": None}
+                log = pathlib.Path(c["log"]) if c["log"] else None
+                if log and log.is_file():
+                    c["log_mtime"] = log.stat().st_mtime
+                    tail = log.read_text(encoding="utf-8", errors="replace")[-4000:]
+                    d = re.findall(r"status=(\w+) duration=([\d.]+)s", tail)
+                    if d and c["started_ts"]:
+                        c["ended_ts"] = c["started_ts"] + float(d[-1][1])
+                    # measured: the manifest says `running` until the whole delegate call ends (a parallel group's
+                    # first child finishes earlier); the transcript's last line `final | end status=<s>` is per child
+                    end = re.findall(r"\| end status=(\w+)", tail)
+                    if end and c["status"] == "running":
+                        c["status"] = end[-1]
+                if best is None or (c["started_ts"] or 0) > (best["started_ts"] or 0):
+                    best = c
+    return best
 
 
 def lock_path(scratch, slot=None):
     return pathlib.Path(scratch) / "runs" / (f"slot-{int(slot)}.lock" if slot else "worker.lock")
 
 
-def read_lock_file(p):
-    """(lock dict or None, alive) for one lock file. alive = the launcher OR the worker named in it still runs.
+def write_lock(scratch, slot, data):
+    p = lock_path(scratch, slot)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(data), encoding="utf-8")
 
-    measured (Linux): a SIGKILLed launcher leaves its worker running (the worker has its own session so `stop` can kill
-    its group), and a lock that checked only the launcher let a second dispatch start beside the orphan.
-    """
-    p = pathlib.Path(p)
-    if not p.is_file():
-        return None, False
+
+def remove_lock(scratch, slot, run_id):
+    p = lock_path(scratch, slot)
     try:
-        d = json.loads(p.read_text(encoding="utf-8"))
-    except ValueError:
-        return {"raw": p.read_text(encoding="utf-8", errors="replace")}, False
-    d["_path"] = str(p)
-    return d, pid_alive(d.get("launcher_pid")) or pid_alive(d.get("worker_pid"))
+        if json.loads(p.read_text(encoding="utf-8")).get("run_id") == run_id:
+            p.unlink()
+    except (OSError, ValueError):
+        pass
+
+
+def lock_state(lock, now=None):
+    """`running` (its child runs and wrote to its transcript in the last 2 h), `prepared` (no child yet, prepared in the
+    last 10 min), `done` (its child ended; finish has not run) or `interrupted` (anything else: /new, the app closed,
+    a child that never started)."""
+    now = now or time.time()
+    age = now - float(lock.get("prepared") or 0)
+    c = child_of(lock.get("run_id") or "?")
+    if c is None:
+        return "prepared" if age < DISPATCH_SECS else "interrupted"
+    if c["status"] == "running":
+        seen = c.get("log_mtime") or c["started_ts"] or 0
+        return "running" if now - seen < STALE_SECS else "interrupted"
+    return "done"
 
 
 def read_locks(scratch):
-    """[(lock, alive)] for worker.lock and every slot lock (0.17.0)."""
+    """[(lock dict, state)] for worker.lock and every slot lock. The dict's `_path` names its file."""
     runs = pathlib.Path(scratch) / "runs"
-    files = sorted(runs.glob("*.lock")) if runs.is_dir() else []
-    return [x for x in (read_lock_file(f) for f in files) if x[0] is not None]
-
-
-def read_lock(scratch):
-    """(lock dict or None, alive) for "is any worker running": the first live lock of any kind, else a stale one.
-    The dict's `_path` names its file."""
-    locks = read_locks(scratch)
-    live = [x for x in locks if x[1]]
-    return (live or locks or [(None, False)])[0]
-
-
-def kill_tree(pid):
-    """Kill a worker and all its children. Windows: taskkill /T /F. Elsewhere: SIGTERM to its process group (the
-    launcher starts the worker in its own session, so the group is the worker's and not the planner's)."""
-    if not pid_alive(pid):
-        return False
-    if sys.platform == "win32":
-        return subprocess.run(["taskkill", "/PID", str(int(pid)), "/T", "/F"], capture_output=True).returncode == 0
-    import signal
-    try:
-        os.killpg(int(pid), signal.SIGTERM)
-    except OSError:
+    out = []
+    for f in sorted(runs.glob("*.lock")) if runs.is_dir() else []:
         try:
-            os.kill(int(pid), signal.SIGTERM)
-        except OSError:
-            return False
-    return True
+            d = json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            d = {"raw": f.read_text(encoding="utf-8", errors="replace")}
+        d["_path"] = str(f)
+        out.append((d, lock_state(d)))
+    return out
 
 
-def proc_cmdline(pid):
-    """Command line of a process as one string, or None when it cannot be read (then nothing is signalled)."""
-    try:
-        return pathlib.Path(f"/proc/{int(pid)}/cmdline").read_bytes().replace(b"\0", b" ").decode("utf-8", "replace")
-    except (OSError, ValueError):
-        pass
-    if sys.platform == "win32":
-        return None
-    try:
-        r = subprocess.run(["ps", "-p", str(int(pid)), "-o", "args="], capture_output=True, text=True, timeout=10)
-        return r.stdout.strip() or None
-    except (OSError, ValueError, subprocess.SubprocessError):
-        return None
+def busy(scratch):
+    """The first (lock, state) whose run is running or about to (prepared), else None."""
+    return next(((l, s) for l, s in read_locks(scratch) if s in ("running", "prepared")), None)
 
 
-def read_dispatcher(scratch):
-    """runs/dispatcher.lock as a dict (pid, started, feature), or None."""
-    try:
-        d = json.loads((pathlib.Path(scratch) / "runs" / "dispatcher.lock").read_text(encoding="utf-8"))
-        return d if isinstance(d, dict) else None
-    except (OSError, ValueError):
-        return None
-
-
-def dispatcher_alive(scratch):
-    """The lock dict of a running kanban dispatcher, else None. Alive = runs/dispatcher.lock names a live pid (not this
-    process) whose command line contains `kanban.py`; a dead pid or a foreign process is a stale lock."""
-    d = read_dispatcher(scratch)
-    pid = d.get("pid") if d else None
-    if not pid_alive(pid) or int(pid) == os.getpid() or "kanban.py" not in (proc_cmdline(pid) or ""):
-        return None
-    return d
+def blocking_lock(scratch, slot=None):
+    """(lock, state) that refuses a new prepare, else None. A serial run is refused by any lock; a slot run by
+    worker.lock or its own slot lock. Unfinished runs (done, interrupted) refuse too: resume finishes them first."""
+    mine = {lock_path(scratch).name, lock_path(scratch, slot).name} if slot else None
+    for l, s in read_locks(scratch):
+        if mine is None or pathlib.Path(l["_path"]).name in mine:
+            return l, s
+    return None
 

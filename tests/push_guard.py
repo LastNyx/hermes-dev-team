@@ -83,36 +83,26 @@ def run():
     # better than documented.
     print(f"INFO known gap: worker deletes a teammate's branch by URL -> {'caught' if g else 'not caught'} here")
 
-    # ---- through the launcher: main() runs for real (config, lock, snapshot, guards, RESULT line, runs.log); only
-    # the model is replaced by a scripted worker that does the git action and claims PASS.
-    (me / ".team.json").write_text('{"test": "git status"}'); (me / ".gitignore").write_text(".scratch/\n")
+    # ---- through the launcher: prepare and finish run for real (config, lock, snapshot, guards, RESULT line,
+    # runs.log); the delegate child is replaced by the git action plus a PASS answer.
+    (me / ".team.json").write_text('{"test": "git status", "options": {"dev": "standard"}}')
+    (me / ".gitignore").write_text(".scratch/\n")
     sh(me, "add", "-A"); sh(me, "commit", "-q", "-m", "config"); sh(me, "push", "-q", "origin", "feat")
     sh(me, "push", "-q", "origin", "main:old-me2")
     sh(mate, "push", "-q", "origin", "main:mate-c"); sh(me, "fetch", "-q")
+    env = {**os.environ, "HERMES_HOME": str(ROOT / "hermes-home")}
 
     def launch(action):
-        def fake_worker(cmd, progress_path, env=None, lock=None):
-            pathlib.Path(progress_path).write_text("")
-            action()
-            return {"type": "result", "subtype": "success", "result": "RESULT: PASS done", "num_turns": 1,
-                    "usage": {}, "_exit": 0}
-        rw.stream_worker = fake_worker
-        argv, out = sys.argv, []
-        sys.argv = ["run-worker.py", "dev", "do the ticket", "--backend", "claude"]
-        import contextlib, io
-        buf = io.StringIO()
-        try:
-            with contextlib.redirect_stdout(buf):
-                rc = rw.main()
-        finally:
-            sys.argv = argv
-        lines = buf.getvalue().strip().splitlines()
-        return rc, next((l for l in reversed(lines) if l.startswith("RESULT")), "")
+        r = subprocess.run([sys.executable, str(KIT / "run-worker.py"), "prepare", "dev", "do the ticket"], cwd=me,
+                           capture_output=True, text=True, env=env)
+        rid = next((l.split()[1] for l in r.stdout.splitlines() if l.startswith("PREPARED ")), None)
+        if not rid:
+            return 2, r.stdout + r.stderr
+        action()
+        r = subprocess.run([sys.executable, str(KIT / "run-worker.py"), "finish", rid], cwd=me, capture_output=True,
+                           text=True, env=env, input='{"verdict": "PASS", "summary": "done"}')
+        return r.returncode, (r.stdout.strip().splitlines() or [""])[-1]
 
-    import shutil
-    if not shutil.which("claude"):
-        print("SKIP launcher checks: claude CLI not on PATH (main() refuses before the worker starts)")
-        return
     rc, line = launch(lambda: sh(mate, "push", "-q", "origin", "--delete", "mate-c"))
     check("launcher: teammate deletes a branch mid-run -> RESULT dev PASS, exit 0",
           rc == 0 and line.startswith("RESULT dev PASS"), line)

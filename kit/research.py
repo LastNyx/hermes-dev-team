@@ -36,7 +36,8 @@ def cmd_init(_):
     made = []
     if not (h / ".git").is_dir():
         git(h, "init", "-q", "-b", "main"); made.append("git init")
-    for name, body in ((".team.json", json.dumps({"scratch": ".scratch"}, indent=1) + "\n"),
+    for name, body in ((".team.json", json.dumps({"scratch": ".scratch", "options": {"researcher": "standard"}},
+                                                  indent=1) + "\n"),
                        (".gitignore", "src/\n.scratch/\n__pycache__/\n")):
         if not (h / name).is_file():
             (h / name).write_text(body, encoding="utf-8"); made.append(name)
