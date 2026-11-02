@@ -37,7 +37,7 @@ unit tests, a headless browser test that starts its own server). Any other check
 
 Record every Verify with `scratch.py status ... --verify "PASS|FAIL|SKIP: <what you saw>"`: it writes `Planner
 Verify:` under the ticket's `## Result` and a `planner` line in `runs.log`. Nothing forces it: a ticket with a
-`Verify:` line moved without one is a gap the user sees in hermes-dev-watch (SKIP for a check that waits).
+`Verify:` line moved without one is a gap the user sees in runs.log (SKIP for a check that waits).
 
 ## No deletions in tickets
 

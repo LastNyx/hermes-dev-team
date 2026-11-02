@@ -11,8 +11,8 @@ you decisions while away ("keep going", "decide yourself", "continue till finish
 | **Small** | new behaviour, but one seam and a few acceptance criteria | QUICK lane: a short ticket, one dev run, your step 6. It joins the next batch's `batches.md` line, so it gets reviewed with that batch, not in a round of its own. |
 | **Large / risky** | several seams; data or schema changes; auth, money, deletion, migrations; anything you would want a second pair of eyes on | FULL lane, as in the procedure. |
 
-When unsure between two lanes, take the larger one. Never write feature code yourself in a delegated subagent: it
-has no allow-list, runs on the planner's model and leaves no `runs.log` line; use the launcher.
+When unsure between two lanes, take the larger one. Never give feature code to a `delegate_task` child without
+`run-worker.py prepare`: it would run on your model, with no guards and no `runs.log` line; use step 4.
 
 ## Trivial lane, step by step
 

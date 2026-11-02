@@ -1,9 +1,8 @@
 # Changing the team skills
 
-Load before patching `orchestrate` (or any file under it), a role file, or the launcher. Backend details live in the
-team repo, not in a skill: `docs/backend-claude.md` (allow-list rules, each measured) and `docs/backend-hermes.md`
-(prompt-only limits, which guards apply). After a launcher or backend change, run `tests/backend_smoke.py`.
-New machine, or after a kit change: `python <team repo>/tests/backend_smoke.py` (calls a model) proves each backend.
+Load before patching `orchestrate` (or any file under it), a role file, or the launcher. Worker details live in the
+team repo, not in a skill: `docs/backend-delegate.md` (what a delegate child can do, which guards apply). After a
+launcher change, run the no-model tests and the chat checklist in `docs/testing.md` (`tests/chat_check.py`).
 Workers may run the test command, which executes code the dev wrote. That hole remains; review before merge.
 
 - The team skills are linked into the team repo, so any `skill_manage` edit is an uncommitted change there. Before
@@ -18,11 +17,10 @@ Workers may run the test command, which executes code the dev wrote. That hole r
 
 ## Adding a role or a role rule
 
-- Ship the role prompt, its JSON allow-list, the launcher wiring (and what the Hermes backend gets instead: tool
-  rules, a guard), a row in TEAM.md, a line in `docs/design.md`, a skill reference with its trigger row, and a test
-  file with at least one real run; one grilled design is one release.
-- Agnostic by default: a new mechanism must work on both backends, or say in `docs/design.md` why it cannot. Prefer
-  an after-run guard (works everywhere) over a Claude-only permission rule.
+- Ship the role prompt, the launcher wiring (tool rules, a guard), a row in TEAM.md, a line in `docs/design.md`, a
+  skill reference with its trigger row, and a test file plus a `chat_check.py` scenario run for real once; one grilled
+  design is one release.
+- Nothing blocks a delegate child: a new limit is a brief rule plus an after-run guard in `finish`.
 - Don't grow back: when the planner skips a step, fix the instruction or accept the slip. Add code (a refusal, a WARN)
   only when a slip has cost real work more than once.
 - Each new role rule gets a toy repo where the wrong path is tempting, run for real; if the worker ignores a rule
@@ -33,7 +31,7 @@ Workers may run the test command, which executes code the dev wrote. That hole r
 ## Keeping SKILL.md small
 
 The planner loads all of SKILL.md every session, so its size is paid on every project. Check `wc -w` before adding.
-- A rule that applies only to one project shape or event (multi-repo, shared repo, switching, Hermes backend, browser
+- A rule that applies only to one project shape or event (multi-repo, shared repo, switching, browser
   UI, a single step's detail) goes into the matching `references/<topic>.md`, never into the main procedure. Extend
   an existing reference before creating one; add a new one only with a row in SKILL.md's trigger table.
 - SKILL.md keeps the core loop (steps 0-11) and pitfalls that apply to every project; each step names the reference

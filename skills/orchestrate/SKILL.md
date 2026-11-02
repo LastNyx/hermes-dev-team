@@ -1,7 +1,7 @@
 ---
 name: orchestrate
 description: Run dev, reviewer, docs, researcher workers; verify results.
-version: 0.13.0
+version: 1.0.0
 author: hermes-dev-team contributors
 license: MIT
 platforms: [linux, macos, windows]
@@ -13,10 +13,10 @@ metadata:
 
 # orchestrate
 
-You are the planner in Hermes. Workers are headless runs started by `kit/run-worker.py` on whichever backend is set
-up (Claude Code or a Hermes worker profile; the launcher picks it). One worker at a time, except a parallel dev group
-(step 4b) or the kanban dispatcher (step 4c). Keep your own context small:
-read result lines and files, never a worker's transcript.
+You are the planner in Hermes. Workers are Hermes `delegate_task` children you start yourself: `kit/run-worker.py
+prepare` writes the brief and prints the task, you delegate it, `run-worker.py finish` checks the repo afterwards and
+prints the one RESULT line. One worker at a time, except a parallel dev group (step 4b). Keep your own context small:
+read RESULT lines and files, never a worker's transcript.
 
 ## When to Use
 
@@ -29,9 +29,12 @@ folder.
 ## Setup and references
 
 Python 3; a clean git tree; `KIT` = the team repo's `kit/` (absolute, forward slashes). Each project has a
-`.team.json` with its full test command (`{"test": "npm test"}`, or one suite per folder: `config.md`); if missing, ask
-for it once and write only that (the dev cannot edit it). Never ask about models, backend or effort unless the user does. Glossary: `CONTEXT.md` if the
-repo has one, else `GLOSSARY.md`; never create the second.
+`.team.json` with its full test command and a delegate model option per role:
+`{"test": "npm test", "options": {"dev": "standard", "reviewer": "standard", "docs": "fast", "researcher": "standard"}}`
+(one suite per folder: `config.md`). If `prepare` says `.team.json not set up for delegate workers`, show the user the
+replacement JSON it printed and write it only on their yes (the dev cannot edit it). Never pick another option
+unless the user asks (`deep` for a hard bug, per run with `--option deep`). Glossary: `CONTEXT.md` if the repo has
+one, else `GLOSSARY.md`; never create the second.
 
 Load a reference with `skill_view(name="orchestrate", file_path="references/<file>")` only when its trigger applies:
 
@@ -41,8 +44,8 @@ Load a reference with `skill_view(name="orchestrate", file_path="references/<fil
 | `lanes.md` | routing a request, finding or gap (trivial / small / large), or the user hands you decisions while away |
 | `workspace.md` | the config has `"repos"` (multi-repo workspace) |
 | `shared-repo.md` | the config has `"shared": true` |
-| `switching.md` | "switching", a force-stop request, a killed worker, or step 0 reports a lock, an orphaned worker, `DIVERGED` or `ASK` for a dirty tree |
-| `config.md` | other `.team.json` keys, worker rules files, a RESULT with `backend=hermes`, or an `ERROR` about the backend |
+| `switching.md` | "switching", a force-stop request, `/new` or a closed app mid-run, or step 0 reports `INTERRUPTED`, `DIVERGED` or `ASK` for a dirty tree |
+| `config.md` | other `.team.json` keys, worker rules files, a `.team.json not set up` refusal, or what a child can and cannot do |
 | `browser-projects.md` | the project has a browser UI |
 | `changing-skills.md` | before patching this skill, a role file or the launcher |
 | `research.md` | how some code works, a whole-repo or cross-folder search, or whether a repo or library is worth using |
@@ -54,9 +57,12 @@ Load a reference with `skill_view(name="orchestrate", file_path="references/<fil
    only, prints each feature's state). Show the user the report, then act:
    - `VERIFY` (a commit ending `(<ticket file>)` exists): step 6 for it.
    - `REDISPATCH` (no commit, clean tree): step 4 with that ticket.
+   - `INTERRUPTED <ticket>`: the chat ended mid-run; resume already finished the run (guards checked). Then treat the
+     ticket by the line under it (VERIFY / REDISPATCH / ASK).
    - `ASK`, `RESUME STOP`, `DIVERGED`: show the user the lines and wait. Never reset, stash, merge, rebase or commit
      worker code to get past it (only exception: step 5's commit on the user's explicit yes).
-   - `worker running`: wait for its exit notice.
+   - `worker running` / `worker prepared`: a child from this session is still out (wait for its result), or a
+     prepared run was never delegated (delegate its DELEGATE line, or `scratch.py stop`).
    Follow `decisions.md` (what the user decided in chat). Tickets, reviews, `runs.log` and git are the rest of the state.
 1. **Branch.** Create the feature branch from main. Once per project, `python KIT/scratch.py init` makes the scratch
    folder its own git repo. Commit the glossary and ADRs on the branch as `docs: context` (not in a shared repo, not a
@@ -65,54 +71,44 @@ Load a reference with `skill_view(name="orchestrate", file_path="references/<fil
    Verify per ticket) and the proposed review batches; they approve both before step 3.
 3. **Pick** the next `todo` ticket whose blockers are `done` (`python KIT/tickets.py <feature> --next`) and set it
    `in-progress`. Every Status change goes through `python KIT/scratch.py status <feature> <NN> <status>`, never a
-   hand edit: it edits, commits the scratch repo and logs a `planner` line the user sees in hermes-dev-watch.
+   hand edit: it edits, commits the scratch repo and logs a `planner` line in runs.log the user can read.
    **Whenever the user decides something in chat**, or you change a ticket after dispatch:
    `python KIT/scratch.py decide <feature> "<one line>"` at once.
-4. **Dispatch dev** with `terminal(background=true, heartbeat=120)`, cwd = the repo:
-   `python -u KIT/run-worker.py dev "ticket: .scratch/<feature>/issues/NN-slug.md"`. The launcher takes the test
-   command from the ticket and picks the backend; never retype the one or choose the other. Tell the user the
-   `progress:` path from the `START` line, then end your turn; never `process wait` (it blocks heartbeats). Answer a
-   heartbeat in one short line with no tool calls. Act only on the exit notice. Same for steps 8 and 9.
+4. **Dispatch dev**, three calls, cwd = the repo:
+   - `python KIT/run-worker.py prepare dev "ticket: .scratch/<feature>/issues/NN-slug.md"`. It takes the test command
+     from the ticket and the option from `.team.json`; never retype either. Last lines: one `DELEGATE {...}` and
+     `PREPARED <run-id> ...`.
+   - `delegate_task` with `tasks` = [the DELEGATE JSON], unchanged (goal, context, option, output_schema). Never add
+     your own goal text: the `[hdt] <run-id>` tag is how the kit finds the child. Then end your turn with one line;
+     never poll the transcript. While the child runs, never edit a skill (the skills guard would fail the run).
+   - When the result arrives: pipe the child's final answer (its JSON, verbatim) into
+     `python KIT/run-worker.py finish <run-id> --api-calls <n>`. Same three calls for steps 8 and 9.
 4b. **Parallel dev** (only when `.team.json` has `max_workers` > 1 and a `setup` list): when the batch has two or
    more `todo` tickets with no blockers between them and Seams that name different files, write them as one group in
    `batches.md` (`Parallel: 01 02 | 03`) and dispatch the group instead of step 3-4 for each:
-   `python -u KIT/scratch.py dispatch <feature> 01 02` with `terminal(background=true, heartbeat=120)`, cwd = the repo.
-   It refuses overlapping Seams (run those one after another), sets the tickets `in-progress`, runs one dev per pool
-   worktree, then merges each PASS branch into the feature branch in ticket order. Read one RESULT line per ticket
-   and the merge line under it, then step 6 for each merged ticket. `FAIL conflict`: redispatch that ticket alone
-   (step 4) from the new tip. Last line `DISPATCH STOP usage limit hit`: pause the whole queue and tell the user;
-   never redispatch until the limit resets. Never dispatch a reviewer, docs or researcher in a group.
-4c. **Kanban dispatcher** (opt-in; this is the kit's own board, NOT Hermes' built-in `hermes kanban`; guide
-   `docs/kanban-guide.md`). Use it instead of 4b when a whole feature's tickets should run on their own: it keeps up to
-   `max_workers` (at most 3) dev workers busy, refills a slot when one ends, merges each PASS branch, retries a failure
-   once, pauses on a usage limit. Requirements, checked FIRST, never assumed:
-   - `KIT/kanban.py` exists. If the kit has no `kanban.py` (kit older than 0.18.0, this skill older than 0.13.0), STOP and
-     tell the user: "the dev-kit here is too old for the kanban dispatcher: `git pull` in the hermes-dev-team repo, then
-     `link-skills.py`". If there is no `hermes-dev-team` folder at all, ask the user before installing (`LEARN.md`).
-   - `.team.json` has `max_workers` >= 1 and a `setup` list; the repo is clean and on the feature branch.
-   Start: `python KIT/kanban.py run <feature> --dry-run` (shows what would start, writes nothing), then run the line
-   printed by `python KIT/kanban.py service <feature>` (a `systemd-run --user` unit; a plain background job is killed
-   with the chat). Watch with `kanban.py board` / `status`; end your turn and act on the exit notice or the user. While it
-   runs it is the only writer of ticket Status: pause it (`kanban.py pause`) or stop it (`kanban.py stop`) before editing
-   tickets, and never run `scratch.py dispatch` beside it. Finished tickets are `review` (already merged): continue at
-   step 6 for each, review as usual, and you set `done`. A `blocked` ticket has a `Dispatcher:` line in its `## Result`:
-   read it and the progress log, fix the cause, set `todo` again. Reviewers, docs and researcher still run through
-   `run-worker.py`, never through the dispatcher.
-5. **Read the one RESULT line**: `RESULT dev PASS <sha> | ...` or `RESULT dev FAIL <reason> | ...`, plus any denied
-   calls, and show the user the ticket's `Not checked:` line. Exit 0 = PASS and the guards held (main unmoved, branch
-   unchanged, no history rewrite, no protected file changed, nothing pushed). Never trust a worker's own exit code.
+   `python KIT/scratch.py dispatch <feature> 01 02` (cwd = the repo). It refuses overlapping Seams (run those one
+   after another), sets the tickets `in-progress`, prepares one run per pool worktree and prints one DELEGATE line
+   each. Start them in ONE `delegate_task` call (`tasks` = every DELEGATE JSON), `finish` each run as its result
+   arrives, then `python KIT/scratch.py merge <feature>`: it merges each PASS branch in ticket order and prints one
+   line per ticket. Step 6 for each merged ticket. `FAIL conflict`: redispatch that ticket alone (step 4) from the
+   new tip. Last line `MERGE STOP usage limit hit`: pause the whole queue and tell the user; never redispatch until
+   the limit resets. Never dispatch a reviewer, docs or researcher in a group.
+5. **Read the one RESULT line** from `finish`: `RESULT dev PASS <sha> | ...` or `RESULT dev FAIL <reason> | ...`, and
+   show the user the `Not checked:` line above it. Exit 0 = PASS and the guards held (main unmoved, branch unchanged,
+   no history rewrite, no protected file changed, nothing pushed, no skill changed). Never trust the child's own
+   summary: only finish's RESULT counts.
    **FAIL with uncommitted work** (`work uncommitted`, or a dirty `git status --short`): never re-dispatch first (the
    dev refuses a dirty tree). Show the user `git status --short`, `git diff --stat` and the reason; they commit or
    discard. You may commit only on their explicit yes for that diff, with a subject NOT ending `(<ticket file>)`.
-   Then step 6 and `scratch.py decide`. With `enforce=prompt-only` in the RESULT, also load `config.md`.
+   Then step 6 and `scratch.py decide`. Every run is `enforce=prompt-only`: step 6's `git status --short` matters.
 6. **Verify**: `git log --stat -1`, the ticket's `Test command`, `git status --short`; for a bug ticket show the user
    the Result's `Cause:` line. Then the ticket's `Verify:` line if you can run it alone now (`tickets.md`). Record the move with what you saw:
    `scratch.py status <feature> <NN> review --verify "PASS|FAIL|SKIP: <what you saw>"` (quick lane: `done`; SKIP for a
    check that waits). A gap you find becomes a fix ticket (`tickets.md`) plus a `decide` line. FAIL in the test
    command: set `blocked`, tell the user the reason line.
 7. Repeat 3-6 until the batch's tickets are all `review` (quick lane: all `done`, then step 10).
-8. **Review the batch** (full lane):
-   `python -u KIT/run-worker.py reviewer "feature: .scratch/<feature> batch: <b> tickets: NN,NN base: <sha> round: <n>"`.
+8. **Review the batch** (full lane), the step-4 calls with
+   `python KIT/run-worker.py prepare reviewer "feature: .scratch/<feature> batch: <b> tickets: NN,NN base: <sha> round: <n>"`.
    `base` = the commit before the batch's first commit: `git merge-base HEAD main` for batch 1, else the HEAD recorded
    when the previous batch passed (or the merge commit `sync-main` printed); never HEAD at review time when tickets of
    this batch were built earlier (empty diff). Write it into `batches.md`. Show the user the review's `Not checked:`.
@@ -121,7 +117,8 @@ Load a reference with `skill_view(name="orchestrate", file_path="references/<fil
    FAIL: before dispatching, check each finding against the code and its ticket; one the code disproves, or that is
    outside the ticket, gets a `decide` line and no fix ticket. It wrote `review-<b>-<n>.md` and fix tickets; dispatch them (step 4), add them to `tickets:`, review again with
    round n+1 and the same base. Never dispatch round 3: ask the user (unless a `delegated:` decision exists: `lanes.md`).
-9. **Docs** (full lane, all `done`): `python KIT/run-worker.py docs "feature: .scratch/<feature>"`. Tell the user the
+9. **Docs** (full lane, all `done`): the step-4 calls with `python KIT/run-worker.py prepare docs "feature:
+   .scratch/<feature>"`. Tell the user the
    `drift.md` items. More than three files to edit: split the job or give it a `<feature>/docs-facts.md`.
 10. **Merge.** Tell the user the branch is ready; the user runs `git merge --no-ff`. Never merge or delete a branch;
     never push except `scratch.py switch` (`switching.md`).
@@ -133,7 +130,9 @@ Load a reference with `skill_view(name="orchestrate", file_path="references/<fil
 - Between tool calls, write at most one short line; tickets, `decisions.md`, RESULT lines and `scratch.py` logs are the
   record. This never shortens what the user must read: the resume report, `Not checked:`, `Cause:`, `drift.md` items,
   the ticket table and the final report.
-- Never run two workers at once; the launcher's lock enforces it.
+- Never run two workers at once; `prepare`'s lock enforces it. Never start a child for kit work without `prepare`
+  (no guards, no runs.log line): feature code goes through the launcher only.
+- `/new`, closing the app or "stop" kills a running child: finish never runs. Step 0 finishes it as `interrupted`.
 - The dev's commit subject ends `(<ticket file name>)`; step 0 finds finished tickets by it. Your own commits must not.
 - `FAIL guard:`: `pushed` -> tell the user (they fix the remote); `test-config-changed` or a denial on package/test
   config -> make that change yourself on the user's yes (`tickets.md`), re-dispatch; `history-rewritten` -> restore

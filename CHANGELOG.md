@@ -3,8 +3,40 @@
 Every change to a skill, role, or the launcher gets an entry here, newest first. Linked skills update on `git pull`;
 mark an entry **action** when another machine must do something (re-run `link-skills.py`, paste LEARN.md, etc.).
 
-Format: version, date, then one line per change, naming the file. **watch:** marks a change to the run files that
-hermes-dev-watch reads (`docs/watch-contract.md`).
+Format: version, date, then one line per change, naming the file.
+
+## 1.0.0 - 2026-11-02
+
+Workers are Hermes `delegate_task` subagents (grill log `docs/open/delegate-workers.md` D1-D20). The last version with
+the `claude -p` backend is tag `v0.18.3`.
+
+**action (every machine):** `git pull`, `python kit/link-skills.py --apply`, start a NEW Hermes session (orchestrate
+1.0.0). **action (every project):** `.team.json` needs `"options"` per role, e.g.
+`{"dev": "standard", "reviewer": "standard", "docs": "fast", "researcher": "standard"}`, and loses `backend`, `models`,
+`hermes_profile`, `hermes_models`, `hermes_provider` and `effort`. `prepare` refuses an old file and prints the
+replacement; the planner writes it on your yes. A research home made by `research.py init` before 1.0.0 needs
+`"options": {"researcher": "standard"}` too.
+
+- `kit/run-worker.py`: `prepare <role> "<prompt>"` (config check, lock, git + skills snapshots, the brief file, one
+  `DELEGATE {goal, context, option, output_schema}` line) and `finish <run-id>` (the child's answer on stdin; guards,
+  runs.log, RESULT). New guards `skills-changed` (Hermes skills folder) and `main-checkout-changed` (parallel slots).
+  The worker lock holds a run id; its state (running, prepared, done, interrupted) comes from the child's Hermes
+  manifest and transcript.
+- `kit/scratch.py`: `resume` finishes an unfinished run as `INTERRUPTED` (guards checked); `stop` finishes a stopped
+  child's run as `force-stopped` and refuses while the child runs (`--force` overrides); `dispatch` prepares a parallel
+  group, new `merge <feature>` merges it after every run is finished; `--option` replaces `--extra`.
+- `kit/roles/_tool-rules.md` (was `_tool-rules-hermes.md`): the only tool rules; adds "no skill_manage, memory, browser"
+  and the JSON answer.
+- `kit/research.py init` writes `options` into the research home's `.team.json`.
+- `skills/orchestrate` 1.0.0: steps 4, 4b, 5, 8, 9 use prepare -> delegate_task -> finish; step 4c and every backend
+  mention removed; `references/config.md`, `switching.md`, `research.md`, `lanes.md`, `changing-skills.md` updated.
+- Removed: `kit/backends.py` (claude + headless hermes backends), `kit/git-ro.py`, `kit/roles/*.json` allow-lists,
+  `kit/kanban.py` + `kit/systemd/` + `docs/kanban-guide.md`, the live progress log, `docs/watch-contract.md` and the
+  hermes-dev-watch CI steps, `docs/backend-claude.md`, tests `backend_smoke`, `permission_paths`, `watch_contract`,
+  `watch_parse`, `kanban_*`, `parallel_real`, `ponytail_ideas`.
+- Tests: new `tests/delegate_runs.py` (38 checks) and `tests/chat_check.py` (the chat checklist); `resume_e2e`,
+  `shared_repo`, `researcher` no longer call a model; all 13 scripts run in CI.
+- Docs: `docs/backend-delegate.md` (was backend-hermes.md), README, TEAM, LEARN, design, testing, benchmarks.
 
 ## 0.18.3 - 2026-11-01
 

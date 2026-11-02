@@ -1,7 +1,6 @@
-"""The conditions `scratch.py dispatch` and `kanban.py run` both need before they start a worker (one place, no I/O).
+"""The conditions `scratch.py dispatch` needs before it prepares a parallel group (no I/O).
 
-Each command keeps its own prefix, message text and check order (DISPATCH STOP ... / KANBAN STOP ...); only the test of
-each condition lives here. `cfg` is `teamcfg.load()["cfg"]`, `tc` the whole `teamcfg.load()` result.
+`cfg` is `teamcfg.load()["cfg"]`, `tc` the whole `teamcfg.load()` result.
 """
 
 
