@@ -1,14 +1,12 @@
-"""Parallel dev workers (docs/open/parallel-workers.md D1-D13; delegate children since 1.0.0). Used by `scratch.py
-dispatch`, `scratch.py merge` and `resume`.
+"""Parallel dev workers (0.17.0, docs/open/parallel-workers.md D1-D13). Used by `scratch.py dispatch` and `resume`.
 
 A group of dev tickets of one batch runs at once, one per pool slot: a sibling worktree `<repo>.wN` on a local ticket
-branch `<feature branch>--<NN>` started from the feature branch tip. `dispatch` prepares one run per slot; the planner
-starts all the children in ONE `delegate_task` call. When every run is finished, `merge` merges each PASS branch into
-the feature branch in ticket order (`--no-ff`); a conflict aborts that merge and the ticket is reported `FAIL conflict`
-(its branch kept, the planner redispatches it from the new tip). A merged ticket branch is deleted with
-`git branch -d`. Nothing is pushed. No model is called here.
+branch `<feature branch>--<NN>` started from the feature branch tip. When every worker is done, each PASS branch is
+merged into the feature branch in ticket order (`--no-ff`); a conflict aborts that merge and the ticket is reported
+`FAIL conflict` (its branch kept, the planner redispatches it from the new tip). A merged ticket branch is deleted with
+`git branch -d`. Nothing is pushed. No model is called here: the workers are ordinary `run-worker.py dev` runs.
 """
-import fnmatch, hashlib, json, os, pathlib, re, subprocess, sys
+import fnmatch, hashlib, os, pathlib, re, subprocess, sys, threading
 
 KIT = pathlib.Path(__file__).resolve().parent
 ENV = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
@@ -124,28 +122,25 @@ def prepare_slot(repo, n, branch, base, setup, state_dir):
     return slot, None, ",".join(note)
 
 
-# ------------------------------------------------------------------ prepare + merge (1.0.0: delegate children)
+# ------------------------------------------------------------------ run + merge (D4, D7, D8, D10)
 
-def slot_env(cfg_file, repo_name, repo):
-    """What a pool slot's `run-worker.py prepare` needs: the main checkout's config, name and path."""
-    return {**os.environ, "HDT_CONFIG": str(cfg_file), "HDT_SLOT_OF": repo_name, "HDT_MAIN_CHECKOUT": str(repo),
-            "PYTHONUNBUFFERED": "1"}
+def worker_argv(ticket_path, n, extra=()):
+    """The command line of one dev worker in pool slot n."""
+    return [sys.executable, "-u", str(KIT / "run-worker.py"), "dev", f"ticket: {pathlib.Path(ticket_path).as_posix()}",
+            "--slot", str(n), *extra]
 
 
-def prepare_worker(slot, n, ticket_path, env, option=None):
-    """`run-worker.py prepare dev` in slot N. Returns (run_id or None, DELEGATE json or None, last line)."""
-    cmd = [sys.executable, "-u", str(KIT / "run-worker.py"), "prepare", "dev",
-           f"ticket: {pathlib.Path(ticket_path).as_posix()}", "--slot", str(n)] + (["--option", option] if option else [])
+def run_worker(slot, n, ticket_path, cfg_file, repo_name, extra, results, i):
+    env = {**os.environ, "HDT_CONFIG": str(cfg_file), "HDT_SLOT_OF": repo_name, "PYTHONUNBUFFERED": "1"}
+    cmd = worker_argv(ticket_path, n, extra)
     p = subprocess.run(cmd, cwd=slot, capture_output=True, text=True, env=env, encoding="utf-8", errors="replace")
-    lines = (p.stdout or "").splitlines()
-    task = next((json.loads(l[len("DELEGATE "):]) for l in lines if l.startswith("DELEGATE ")), None)
-    m = next((re.match(r"PREPARED (\S+)", l) for l in lines if l.startswith("PREPARED ")), None)
-    last = (lines or (p.stderr or "no output").strip().splitlines() or ["no output"])[-1]
-    return (m.group(1) if m else None), task, last
+    lines = [l for l in (p.stdout or "").splitlines() if l.startswith("RESULT ")]
+    results[i] = lines[-1] if lines else f"RESULT dev FAIL launcher exited {p.returncode}: " + \
+        " ".join(((p.stderr or p.stdout or "").strip().splitlines() or ["no output"])[-1:])
 
 
 def verdict_word(result_line):
-    m = re.match(r"(?:RESULT \w+ )?(PASS|FAIL|ERROR)", result_line or "")
+    m = re.match(r"RESULT \w+ (PASS|FAIL|ERROR)", result_line or "")
     return m.group(1) if m else "FAIL"
 
 
@@ -168,37 +163,34 @@ def ticket_branch(feature_branch, nn):
     return f"{feature_branch}--{nn}"
 
 
-def prepare_group(repo, feature_branch, items, cfg_file, repo_name, setup, state_dir, option=None, say=print):
-    """items: [(nn, ticket_path)]. Puts each ticket in its own slot and prepares its run.
-    Returns (group dict for runs/group.json, error line or None)."""
+def run_group(repo, feature_branch, items, cfg_file, repo_name, setup, state_dir, extra=(), say=print):
+    """items: [(nn, ticket_path)]. Returns [(nn, result_line, merge_state, detail)]."""
     base = out(repo, "rev-parse", "HEAD")
     if not base:
-        return None, "cannot read the feature branch tip"
-    env = slot_env(cfg_file, repo_name, repo)
-    group = {"branch": feature_branch, "base": base, "repo": str(repo), "runs": []}
+        return [(nn, "RESULT dev ERROR cannot read the feature branch tip", "skipped", None) for nn, _ in items]
+    slots, errors = [], []
     for k, (nn, tp) in enumerate(items, start=1):
         slot, err, note = prepare_slot(repo, k, ticket_branch(feature_branch, nn), base, setup, state_dir)
+        if err:
+            errors.append((nn, err))
+        slots.append(slot)
         say(f"  slot {k}: {slot.name} {ticket_branch(feature_branch, nn)} @ {base[:8]}" + (f" ({note})" if note else "")
             + (f" ERROR {err}" if err else ""))
-        if err:
-            return group, f"slot {k} not ready: {err}"
-        run_id, task, last = prepare_worker(slot, k, tp, env, option)
-        if not run_id:
-            return group, f"{nn}: {last}"
-        group["runs"].append({"nn": nn, "ticket": pathlib.Path(tp).name, "slot": str(slot), "run_id": run_id,
-                              "task": task})
-    return group, None
-
-
-def merge_group(repo, group):
-    """After every run of a group is finished: merge each PASS ticket branch in ticket order.
-    Returns [(nn, verdict line, merge_state, detail)]."""
+    if errors:
+        return [(nn, f"RESULT dev ERROR slot not ready: {e}", "skipped", None) for nn, e in errors]
+    results = [None] * len(items)
+    threads = [threading.Thread(target=run_worker, args=(slots[i], i + 1, tp, cfg_file, repo_name, list(extra),
+                                                         results, i)) for i, (nn, tp) in enumerate(items)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
     report = []
-    for r in group["runs"]:
-        tb = ticket_branch(group["branch"], r["nn"])
-        git(r["slot"], "checkout", "-q", "--detach")              # free the ticket branch for the merge / -d
-        if verdict_word(r.get("verdict")) != "PASS":
-            report.append((r["nn"], r.get("verdict"), "kept", tb)); continue   # D8: no merge; branch kept to look at
-        state, detail = merge_ticket(repo, group["branch"], tb, r["ticket"])
-        report.append((r["nn"], r.get("verdict"), state, detail))
+    for i, (nn, tp) in enumerate(items):
+        line, tb = results[i], ticket_branch(feature_branch, nn)
+        git(slots[i], "checkout", "-q", "--detach")                # free the ticket branch for the merge / -d
+        if verdict_word(line) != "PASS":
+            report.append((nn, line, "kept", tb)); continue      # D8: no merge; branch kept to look at
+        state, detail = merge_ticket(repo, feature_branch, tb, pathlib.Path(tp).name)
+        report.append((nn, line, state, detail))
     return report

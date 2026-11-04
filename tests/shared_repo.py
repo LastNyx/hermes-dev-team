@@ -1,24 +1,20 @@
 #!/usr/bin/env python3
 """E2E: a SHARED repo, where a teammate (no kit, no tests) keeps pushing to main while the user runs the kit.
 
-One bare remote; clone `me` runs the kit, clone `mate` plays the teammate. No model: the test plays each delegate child
-between `run-worker.py prepare` and `finish`. Covers: no false guard:pushed when a teammate pushes mid-run, the
-workspace rules file pasted instead of the team's AGENTS.md, the shared glossary and the suites command in the
-reviewer's brief, sync-main (dry run, refusal mid-batch, clean merge, conflict + abort), baseline, a foreign author on
-the feature branch, and an interrupted run finished by resume. Whether a real reviewer treats the baseline failure as
-pre-existing is model behaviour: the chat checklist in docs/testing.md. Everything happens in a temp folder, deleted
-at the end (--keep keeps it).
+One bare remote; clone `me` runs the kit, clone `mate` plays the teammate. Makes 3 real `claude -p` runs (Sonnet:
+2 dev, 1 reviewer; about $0.40 list). Also covers, with no model: the lock when the launcher is SIGKILLed (orphaned
+worker), sync-main (dry run, refusal mid-batch, clean merge, conflict + abort), baseline, foreign author on the
+feature branch. Everything happens in a temp folder, deleted at the end (--keep keeps it).
 
     python tests/shared_repo.py [--keep]
 
 Last line: `<n>/<total> checks passed`; exit 0 only when all pass. See docs/testing.md.
 """
-import json, os, pathlib, re, shutil, subprocess, sys, tempfile
+import json, os, pathlib, re, shutil, signal, subprocess, sys, tempfile, threading, time
 
 KIT = (pathlib.Path(__file__).resolve().parent.parent / "kit").as_posix()
 ROOT = pathlib.Path(tempfile.mkdtemp(prefix="hdt-shared-"))
-ENV = {**os.environ, "GIT_TERMINAL_PROMPT": "0", "PYTHONIOENCODING": "utf-8", "PYTHONDONTWRITEBYTECODE": "1",
-       "HERMES_HOME": (ROOT / "hermes-home").as_posix()}
+ENV = {**os.environ, "GIT_TERMINAL_PROMPT": "0", "PYTHONIOENCODING": "utf-8", "PYTHONDONTWRITEBYTECODE": "1"}
 results = []
 
 
@@ -29,30 +25,9 @@ def sh(cwd, *args, ok=True):
     return r
 
 
-def kit(cwd, script, *args, stdin=None):
-    r = subprocess.run([sys.executable, "-u", f"{KIT}/{script}", *args], cwd=cwd, capture_output=True, text=True,
-                       env=ENV, encoding="utf-8", errors="replace", input=stdin)
+def kit(cwd, script, *args):
+    r = sh(cwd, sys.executable, "-u", f"{KIT}/{script}", *args, ok=False)
     return r.returncode, (r.stdout + r.stderr).strip()
-
-
-def prepare(cwd, role, prompt):
-    rc, out = kit(cwd, "run-worker.py", "prepare", role, prompt)
-    rid = next((l.split()[1] for l in out.splitlines() if l.startswith("PREPARED ")), None)
-    brief = (ROOT / "ws/.scratch/runs" / f"{rid}.brief.md").read_text(encoding="utf-8") if rid else ""
-    return rc, out, rid, brief
-
-
-def finish(cwd, rid, answer):
-    return kit(cwd, "run-worker.py", "finish", rid, stdin=json.dumps(answer))
-
-
-def build(me, fn, body, test, msg):
-    """What a dev child does for a calc ticket: the function, its test, one commit."""
-    (me / "calc.py").write_text((me / "calc.py").read_text() + f"\n\ndef {fn}(a, b):\n    return {body}\n")
-    (me / f"tests/test_{fn}.py").write_text(f"import unittest\nfrom calc import {fn}\n\n\nclass T(unittest.TestCase):\n"
-                                            f"    def test_{fn}(self):\n        {test}\n")
-    git(me, "add", "calc.py", f"tests/test_{fn}.py"); git(me, "commit", "-qm", msg)
-    return git(me, "rev-parse", "--short", "HEAD")
 
 
 def check(name, ok, detail=""):
@@ -102,6 +77,14 @@ def set_status(p, s):
                  encoding="utf-8")
 
 
+def alive(pid):
+    try:
+        os.kill(pid, 0)
+        return open(f"/proc/{pid}/stat").read().split()[2] != "Z" if os.path.exists(f"/proc/{pid}") else True
+    except OSError:
+        return False
+
+
 def main():
     keep = "--keep" in sys.argv
     print(f"temp folder: {ROOT}")
@@ -132,7 +115,6 @@ def main():
         git(me, "config", k, v)
     (ws / ".team.json").write_text(json.dumps({
         "shared": True, "scratch": ".scratch", "rules": "my-rules.md",
-        "options": {"dev": "standard", "reviewer": "standard", "docs": "fast", "researcher": "standard"},
         "repos": {"app": {"test": "python3 -m unittest discover -s tests"}}}))
     (ws / "my-rules.md").write_text("# My rules\n- Never push. Commit messages in English.\n")
     mate = ROOT / "mate"
@@ -165,16 +147,26 @@ def main():
     # --- batch 1: dev runs while the teammate pushes to main
     base1 = git(me, "rev-parse", "--short", "HEAD")
     set_status(t1, "in-progress"); kit(ws, "scratch.py", "commit", "01 in-progress")
-    rc, out, rid, brief = prepare(me, "dev", f"ticket: {t1.as_posix()}")
-    check("dev 01 prepared; my-rules.md pasted, not the team's AGENTS.md",
-          rc == 0 and "rules=my-rules.md" in out and "Never push. Commit messages in English." in brief
-          and "straight to main" not in brief, out)
-    (mate / "util.py").write_text("def shout(s):\n    return s.upper() + '!'\n")     # the teammate pushes mid-run
+    holder = {}
+
+    def run_dev():
+        holder["r"] = kit(me, "run-worker.py", "dev", f"ticket: {t1.as_posix()}")
+    th = threading.Thread(target=run_dev); th.start()
+    time.sleep(6)
+    (mate / "util.py").write_text("def shout(s):\n    return s.upper() + '!'\n")
     git(mate, "commit", "-qam", "mate: louder shout"); git(mate, "push", "-q", "origin", "main")
-    sha = build(me, "mul", "a * b", "self.assertEqual(mul(3, 4), 12)", "Multiply (01-mul.md)")
-    rc, out = finish(me, rid, {"verdict": "PASS", "summary": "mul", "sha": sha})
+    th.join()
+    rc, out = holder["r"]
+    last = out.splitlines()[-1] if out else ""
+    for l in out.splitlines():
+        if l.startswith("RESULT"):
+            last = l
     check("dev 01: PASS although a teammate pushed to main mid-run (no false guard:pushed)",
-          rc == 0 and f"RESULT dev PASS {sha}" in out, out[-800:])
+          rc == 0 and "RESULT dev PASS" in last, out[-800:])
+    check("dev 01: a commit ending (01-mul.md) on the feature branch",
+          "(01-mul.md)" in git(me, "log", "-1", "--format=%s"))
+    check("my-rules.md was pasted, not the team's AGENTS.md",
+          "rules=my-rules.md" in out.splitlines()[0], out.splitlines()[0])
     check("nothing team-visible added: no .team.json / .scratch / GLOSSARY in the repo",
           not any((me / n).exists() for n in (".team.json", "GLOSSARY.md", "CONTEXT.md"))
           and ".scratch" not in git(me, "ls-files"))
@@ -184,16 +176,16 @@ def main():
     rc, out = kit(me, "scratch.py", "sync-main", "--apply")
     check("sync-main: refuses while a ticket is in review (mid-batch)", rc == 1 and "mid-way" in out, out)
 
-    # --- reviewer for batch 1: the brief carries the shared glossary, the suites command and the base
-    rc, out, rid, brief = prepare(me, "reviewer", f"feature: {(ws / '.scratch/calc').as_posix()} batch: 1 tickets: 01 "
-                                  f"base: {base1} round: 1")
-    check("reviewer batch 1 brief: shared glossary path, suites.py test command with --feature, the base",
-          rc == 0 and (ws / ".scratch/GLOSSARY.md").as_posix() in brief and "suites.py --feature calc" in brief
-          and f"base: {base1}" in brief, out)
-    (ws / ".scratch/calc/review-1-1.md").write_text("# Review\n\nSpec: none\nStandards: none\n\nNot checked: nothing\n")
-    rc, out = finish(me, rid, {"verdict": "PASS", "summary": "no findings", "not_checked": "nothing"})
-    check("reviewer batch 1: a review file in the scratch folder is not a guard; PASS", rc == 0
-          and "RESULT reviewer PASS" in out, out)
+    # --- reviewer for batch 1: diff since base1 only
+    rc, out = kit(me, "run-worker.py", "reviewer", f"feature: {(ws / '.scratch/calc').as_posix()} batch: 1 tickets: 01 "
+                  f"base: {base1} round: 1")
+    rl = [l for l in out.splitlines() if l.startswith("RESULT")]
+    rev = sorted((ws / ".scratch/calc").glob("review-1-1.md"))
+    rtext = rev[0].read_text() if rev else ""
+    check("reviewer batch 1: PASS with the known-broken legacy test treated as pre-existing",
+          rl and "RESULT reviewer PASS" in rl[-1], (rl[-1] if rl else out[-600:]) + "\n" + rtext[:600])
+    check("reviewer batch 1: review does not mention the teammate's util.py change",
+          "util.py" not in rtext and "shout" not in rtext, rtext[:600])
     set_status(t1, "done"); kit(ws, "scratch.py", "commit", "batch 1 done")
 
     # --- sync-main between batches: dry run, then apply
@@ -214,10 +206,9 @@ def main():
 
     # --- batch 2 dev after the sync
     set_status(t2, "in-progress"); kit(ws, "scratch.py", "commit", "02 in-progress")
-    rc, out, rid, brief = prepare(me, "dev", f"ticket: {t2.as_posix()}")
-    sha = build(me, "sub", "a - b", "self.assertEqual(sub(5, 3), 2)", "Subtract (02-sub.md)")
-    rc, out = finish(me, rid, {"verdict": "PASS", "summary": "sub", "sha": sha})
-    check("dev 02 after sync-main: PASS", rc == 0 and "RESULT dev PASS" in out, out[-600:])
+    rc, out = kit(me, "run-worker.py", "dev", f"ticket: {t2.as_posix()}")
+    rl = [l for l in out.splitlines() if l.startswith("RESULT")]
+    check("dev 02 after sync-main: PASS", rc == 0 and rl and "PASS" in rl[-1], out[-600:])
     diff2 = git(me, "diff", "--stat", f"{base2}...HEAD")
     check("batch 2 diff from the sync merge base holds only this feature's files (no util.py)",
           "util.py" not in diff2 and "calc.py" in diff2, diff2)
@@ -246,15 +237,24 @@ def main():
           rc == 1 and "CONFLICT" in out and git(me, "rev-parse", "HEAD") == before
           and not git(me, "status", "--short"), out)
 
-    # --- an interrupted run (the chat was closed): prepare refuses, resume finishes it with the guards
-    rc, out, rid, brief = prepare(me, "dev", f"ticket: {t2.as_posix()}")
+    # --- lock vs orphaned worker (launcher SIGKILLed), no model needed: a fake long worker pid
     lockp = ws / ".scratch/runs/worker.lock"
-    d = json.loads(lockp.read_text()); d["prepared"] -= 3600; lockp.write_text(json.dumps(d))
-    rc, out, _, _ = prepare(me, "dev", f"ticket: {t2.as_posix()}")
-    check("lock: prepare refused while an interrupted run is not finished", rc == 2 and "interrupted" in out, out)
+    orphan = subprocess.Popen(["sleep", "30"], start_new_session=True)
+    lockp.parent.mkdir(parents=True, exist_ok=True)
+    lockp.write_text(json.dumps({"launcher_pid": 999999, "worker_pid": orphan.pid, "role": "dev",
+                                 "ticket": "02-sub.md", "stamp": "x"}))
+    rc, out = kit(me, "run-worker.py", "dev", f"ticket: {t2.as_posix()}")
+    check("lock: dispatch refused while an orphaned worker (dead launcher) still runs",
+          rc == 2 and "already running" in out, out)
     rc, out = kit(ws, "scratch.py", "resume")
-    check("resume: the interrupted run is reported and finished (guards checked), lock cleared",
-          f"INTERRUPTED 02-sub.md: run {rid}" in out and "FAIL interrupted" in out and not lockp.is_file(), out)
+    check("resume: orphaned worker reported as STOP, not 'wait for its exit notice'",
+          rc == 1 and "orphaned worker" in out, out)
+    rc, out = kit(ws, "scratch.py", "stop")
+    time.sleep(1)
+    check("stop: kills the orphaned worker", not alive(orphan.pid) or orphan.poll() is not None, out)
+    orphan.wait(timeout=10)
+    rc, out = kit(ws, "scratch.py", "resume")
+    check("resume after the orphan is gone: lock cleared", not lockp.is_file(), out)
 
     # --- the team's main was never touched by the kit
     remote_main_log = sh(ROOT, "git", "--git-dir", str(bare), "log", "--format=%ae %s", "main").stdout

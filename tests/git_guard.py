@@ -1,16 +1,24 @@
 #!/usr/bin/env python3
-"""The launcher's `guard:git-hooks-or-config-changed` and the researcher's source guard on a hostile repo, no model.
+"""Read-only git for workers (kit/git-ro.py) and the launcher's `guard:git-hooks-or-config-changed`.
 
-The hook/config fingerprint catches a new hook, a content change, a mode change (POSIX only), a removed hook and a
-config edit, and nothing on an ordinary commit. On a repo whose own config runs a program from a plain `git log` or
-`git diff` (gpg.program, diff.external, core.fsmonitor, a textconv driver), the researcher's source fingerprint runs no
-git, so nothing of the repo's runs (0.13.3). The full prepare/finish path with these guards is in delegate_runs.py.
+No model: git-ro.py allows log/diff/show and refuses `--output` (and abbreviations), `--ext-diff`, `--no-index`,
+`--textconv`, a diff path outside the repo, other subcommands; on a repo whose own config runs a program (gpg.program,
+diff.external, core.fsmonitor, a textconv driver) neither git-ro.py nor the researcher's source guard runs it (0.13.3);
+every role's settings lose their raw `git log/diff/show` grants; the hook/config fingerprint catches a new hook, a mode
+change (POSIX only), a config edit, and nothing on an untouched repo; the launcher's `main()` with a scripted worker
+FAILs a run that writes a hook and passes one that does not; the researcher runs without Bash, gets no history.txt,
+and FAILs `guard:source-changed` / `guard:topic-folder-changed` when it edits or commits in the source or writes a
+second file next to its findings (0.14.0), but not for a write inside a skipped build folder (0.14.1).
 
-    python tests/git_guard.py [--keep]
+`--real` adds 4 real `claude -p` calls (Sonnet, about $0.55): the old rule `Bash(git log:*)` lets `git log --output`
+write a file (the 0.13.1 finding), the new settings deny it and the wrapper refuses it, and the wrapper's plain
+`log -1 --format=%h` works.
+
+    python tests/git_guard.py [--keep] [--real]
 
 Last line: `<n>/<total> checks passed`; exit 0 only when all pass. See docs/testing.md.
 """
-import importlib.util, os, pathlib, shutil, stat, subprocess, sys, tempfile
+import contextlib, copy, importlib.util, io, json, os, pathlib, shutil, stat, subprocess, sys, tempfile
 
 KIT = pathlib.Path(__file__).resolve().parent.parent / "kit"
 # resolved: on GitHub's Windows runner TEMP is an 8.3 short path (RUNNER~1) and the launcher resolves to the long one
@@ -34,6 +42,11 @@ def sh(cwd, *args):
     return r.stdout.strip()
 
 
+def ro(cwd, *args):
+    r = subprocess.run([sys.executable, str(KIT / "git-ro.py"), *args], cwd=cwd, capture_output=True, text=True)
+    return r.returncode, (r.stdout + r.stderr).strip()
+
+
 def check(name, ok, detail=""):
     results.append(bool(ok))
     print(("PASS " if ok else "FAIL ") + name)
@@ -45,11 +58,36 @@ def make_repo(name):
     repo = ROOT / name
     sh(ROOT, "init", "-q", "-b", "main", name)
     sh(repo, "config", "user.email", "t@x"); sh(repo, "config", "user.name", "t")
-    (repo / ".team.json").write_text('{"test": "git status", "options": {"dev": "standard"}}'); (repo / ".gitignore").write_text(".scratch/\n")
+    (repo / ".team.json").write_text('{"test": "git status"}'); (repo / ".gitignore").write_text(".scratch/\n")
     (repo / "a.txt").write_text("one\n")
     sh(repo, "add", "-A"); sh(repo, "commit", "-q", "-m", "init")
     sh(repo, "checkout", "-q", "-b", "feat")
     return repo
+
+
+def wrapper_checks(repo):
+    rc, out = ro(repo, "log", "-1", "--format=%s")
+    check("git-ro: log -1 --format=%s works", rc == 0 and out == "init", out)
+    (repo / "a.txt").write_text("two\n")
+    rc, out = ro(repo, "diff", "--stat")
+    check("git-ro: diff --stat works", rc == 0 and "a.txt" in out, out)
+    sh(repo, "checkout", "-q", "--", "a.txt")
+    rc, out = ro(repo, "show", "-s", "--format=%s", "HEAD")
+    check("git-ro: show -s works", rc == 0 and out == "init", out)
+    target = ROOT / "written-by-git.txt"
+    for args in (["log", "-1", f"--output={target}"], ["log", "-1", "--output", str(target)],
+                 ["log", "-1", f"--outp={target}"], ["diff", f"--output={target}"],
+                 ["show", "-s", f"--output={target}", "HEAD"]):
+        rc, out = ro(repo, *args)
+        check(f"git-ro refuses {' '.join(args[:3]).replace(str(target), '<path>')}",
+              rc == 2 and "GIT-RO STOP" in out and not target.exists(), out)
+    for args, want in ((["diff", "--ext-diff"], "refused"), (["diff", "--no-index", "a.txt", "b.txt"], "refused"),
+                       (["diff", str(ROOT / "outside.txt")], "outside the repo"), (["status"], "only log")):
+        if args[-1].endswith("outside.txt"):
+            (ROOT / "outside.txt").write_text("x\n")
+        rc, out = ro(repo, *args)
+        check(f"git-ro refuses {' '.join(a if 'outside' not in a else '<outside path>' for a in args)}",
+              rc == 2 and want in out, out)
 
 
 def hostile_repo(name, mark):
@@ -81,6 +119,14 @@ def hostile_checks(rw):
     raw = subprocess.run(["git", "--no-pager", "log", "-1"], cwd=repo, capture_output=True)
     check("hostile source: plain `git log` runs the repo's program (the 0.13.3 finding, so the probe is live)",
           mark.exists(), raw.stderr.decode(errors="replace")[-300:])
+    for args in (["log", "-1"], ["log", "-1", "--format=%G?"], ["diff"], ["diff", "--stat"], ["show", "-s"]):
+        mark.unlink(missing_ok=True)
+        rc, out = ro(repo, *args)
+        check(f"git-ro {' '.join(args)} on a hostile repo: nothing of the repo's runs", not mark.exists(), out[-300:])
+    rc, out = ro(repo, "diff", "--textc")
+    check("git-ro refuses --textc (an abbreviation of --textconv)", rc == 2 and "refused" in out, out)
+    rc, out = ro(repo, "diff", "--text", "--stat")
+    check("git-ro allows --text (a different option)", rc == 0 and "a.txt" in out, out)
     mark.unlink(missing_ok=True)
     topic = ROOT / "topic-hostile"; topic.mkdir()
     (topic / "questions.md").write_text("1. x\n")
@@ -89,6 +135,22 @@ def hostile_checks(rw):
     g = rw.research_guards(snap, paths)
     check("research guard on a hostile source: runs no git (nothing of the repo's runs), no change -> no guard",
           not mark.exists() and g == [], g)
+
+
+def settings_checks(rw):
+    raw = []
+    for role in ("dev", "reviewer", "docs", "researcher"):
+        s = json.loads((KIT / "roles" / f"{role}.json").read_text(encoding="utf-8"))
+        subs = rw.read_only_git(s)
+        left = [r for r in s["permissions"]["allow"] if rw.RAW_GIT_READ.match(r)]
+        wrapped = [r for r in s["permissions"]["allow"] if "git-ro.py" in r]
+        raw.append((role, subs, left, wrapped))
+    check("every role: no raw `Bash(git log|diff|show...)` grant left after read_only_git",
+          all(not left for _, _, left, _ in raw), raw)
+    check("dev, reviewer, docs get the wrapper for the subcommands they had (researcher none)",
+          [(r, s) for r, s, _, w in raw if len(w) == len(s)] == [(r, s) for r, s, _, _ in raw]
+          and dict((r, s) for r, s, _, _ in raw) == {"dev": ["diff", "log"], "reviewer": ["diff", "log", "show"],
+                                                     "docs": ["diff", "log"], "researcher": []}, raw)
 
 
 def guard_checks(rw, repo):
@@ -120,11 +182,119 @@ def guard_checks(rw, repo):
     return hooks
 
 
+def launcher_checks(rw, repo, hooks):
+    os.chdir(repo)
+    seen = {}
+
+    def launch(role, prompt, action):
+        def fake_worker(cmd, env=None, lock=None):
+            seen["cmd"] = cmd
+            action()
+            return {"type": "result", "subtype": "success", "result": "RESULT: PASS done", "num_turns": 1,
+                    "usage": {}, "_exit": 0}
+        rw.stream_worker = fake_worker
+        argv = sys.argv
+        sys.argv = ["run-worker.py", role, prompt]
+        buf = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(buf):
+                rc = rw.main()
+        finally:
+            sys.argv = argv
+        lines = buf.getvalue().strip().splitlines()
+        return rc, next((l for l in reversed(lines) if l.startswith("RESULT")), buf.getvalue()[-300:])
+
+    if not shutil.which("claude"):
+        print("SKIP launcher checks: claude CLI not on PATH (main() refuses before the worker starts)")
+        return
+    rc, line = launch("dev", "do the ticket", lambda: None)
+    s = json.loads(seen["cmd"][seen["cmd"].index("--settings") + 1])
+    allow = s["permissions"]["allow"]
+    check("launcher: dev PASS, settings carry git-ro and no raw git log/diff",
+          rc == 0 and "PASS" in line and any("git-ro.py log:*" in r for r in allow)
+          and not any(rw.RAW_GIT_READ.match(r) for r in allow), (line, allow))
+    check("launcher: the dev prompt names the wrapper command", "git-ro.py" in seen["cmd"][2], seen["cmd"][2][-400:])
+    rc, line = launch("dev", "do the ticket", lambda: (hooks / "post-commit").write_text("#!/bin/sh\n"))
+    check("launcher: a hook written mid-run -> RESULT dev FAIL guard:git-hooks-or-config-changed, exit 1",
+          rc == 1 and "FAIL" in line and "git-hooks-or-config-changed:hooks/post-commit" in line, line)
+    (hooks / "post-commit").unlink()
+
+    src = make_repo("source")
+    os.chdir(repo)
+    topic = repo / ".scratch" / "research" / "t1"
+    topic.mkdir(parents=True)
+    (topic / "questions.md").write_text("# Research: t1\n\n1. What is in a.txt?\n")
+    prompt = f"questions: {topic / 'questions.md'} out: {topic / 'findings.md'} source: {src}"
+    rc, line = launch("researcher", prompt, lambda: (topic / "findings.md").write_text("# Findings\n"))
+    tools = seen["cmd"][seen["cmd"].index("--tools") + 1]
+    s = json.loads(seen["cmd"][seen["cmd"].index("--settings") + 1])
+    check("launcher: researcher runs without the Bash tool and with no Bash grant; writing findings passes",
+          rc == 0 and "Bash" not in tools.split(",") and not any(r.startswith("Bash") for r in s["permissions"]["allow"]),
+          (line, tools, s["permissions"]["allow"]))
+    check("launcher: no history.txt any more", not (topic / "history.txt").exists())
+    rc, line = launch("researcher", prompt, lambda: (src / "a.txt").write_text("edited\n"))
+    check("launcher: researcher that edits the source -> FAIL guard:source-changed",
+          rc == 1 and "source-changed:a.txt" in line, line)
+    sh(src, "checkout", "-q", "--", "a.txt")
+    rc, line = launch("researcher", prompt, lambda: sh(src, "commit", "-q", "--allow-empty", "-m", "x"))
+    check("launcher: researcher that commits in the source -> FAIL guard:source-changed (a .git file)",
+          rc == 1 and "source-changed:.git/" in line, line)
+    def build_output():                                 # a dev server or install touching node_modules mid-run
+        (src / "web" / "node_modules" / "pkg").mkdir(parents=True, exist_ok=True)
+        (src / "web" / "node_modules" / "pkg" / "index.js").write_text("x\n")
+    rc, line = launch("researcher", prompt, build_output)
+    check("launcher: a write inside the source's node_modules (a skipped folder) passes; .git is never skipped",
+          rc == 0 and "PASS" in line and "build" in rw.RESEARCH_SKIP and ".git" not in rw.RESEARCH_SKIP, line)
+    rc, line = launch("researcher", prompt, lambda: (topic / "notes.md").write_text("x\n"))
+    check("launcher: researcher that writes another file in the topic folder -> FAIL guard:topic-folder-changed",
+          rc == 1 and "topic-folder-changed:notes.md" in line, line)
+
+
+def claude_run(cwd, settings, command):
+    r = subprocess.run(["claude", "-p", f"Run this one Bash command exactly as written, then say what it printed: "
+                        f"{command}", "--tools", "Bash", "--settings", json.dumps(settings), "--setting-sources", "",
+                        "--model", "sonnet", "--max-turns", "3", "--output-format", "json",
+                        "--no-session-persistence"], cwd=cwd, capture_output=True, text=True, timeout=300)
+    try:
+        return json.loads(r.stdout)
+    except json.JSONDecodeError:
+        return {"result": r.stdout[-500:] + r.stderr[-500:]}
+
+
+def real_checks(rw, repo):
+    os.chdir(repo)
+    base = {"permissions": {"defaultMode": "dontAsk", "allow": ["Read(./**)", "Bash(git log:*)"],
+                            "deny": ["Edit(./.git/**)"]}}
+    old_target = repo / ".git" / "notes-old.txt"
+    d = claude_run(repo, base, f"git log -1 --format=format:hello --output={old_target.as_posix()}")
+    check("real, old rule `Bash(git log:*)`: `git log --output` into .git/ is allowed and writes the file",
+          old_target.is_file(), d.get("result", "")[-300:])
+    new = copy.deepcopy(base)
+    rw.read_only_git(new)
+    new_target = repo / ".git" / "notes-new.txt"
+    d1 = claude_run(repo, new, f"git log -1 --format=format:hello --output={new_target.as_posix()}")
+    d2 = claude_run(repo, new, f"{rw.git_ro_cmd()} log -1 --format=format:hello --output={new_target.as_posix()}")
+    check("real, new settings: plain git log denied, wrapper refuses --output, no file written",
+          not new_target.exists() and (d1.get("permission_denials") or "denied" in d1.get("result", "").lower())
+          and "GIT-RO STOP" in json.dumps(d2), (d1.get("result", "")[-200:], d2.get("result", "")[-200:]))
+    head = sh(repo, "log", "-1", "--format=%h")
+    d3 = claude_run(repo, new, f"{rw.git_ro_cmd()} log -1 --format=%h")
+    check("real, new settings: the wrapper's plain log works", head in d3.get("result", "")
+          and not d3.get("permission_denials"), d3.get("result", "")[-200:])
+    cost = sum(x.get("total_cost_usd") or 0 for x in (d, d1, d2, d3))
+    print(f"      real runs: list ${cost:.2f}")
+
+
 def run():
     rw = load_launcher()
     repo = make_repo("proj")
+    wrapper_checks(repo)
     hostile_checks(rw)
-    guard_checks(rw, repo)
+    settings_checks(rw)
+    hooks = guard_checks(rw, repo)
+    launcher_checks(rw, repo, hooks)
+    if "--real" in sys.argv:
+        real_checks(rw, make_repo("proj-real"))
 
 
 def main():

@@ -2,9 +2,8 @@
 """E2E: resume, force-stop and machine switching (kit/scratch.py + the worker lock), single-repo layout.
 
 Two clones of one toy repo act as machines A and B (a third, C, checks a clean fast-forward); local bare repos are
-the remotes. No model: the test plays the delegate child between `run-worker.py prepare` and `finish` (and fakes a
-running child's Hermes manifest for the wait/stop part). Needs git and Python 3. Everything happens in a temp folder,
-deleted at the end (--keep keeps it).
+the remotes. Makes 2 real `claude -p` dev runs (Sonnet, about $0.20 list price, about 1 minute in total).
+Needs: `claude` logged in, git, Python 3. Everything happens in a temp folder, deleted at the end (--keep keeps it).
 
     python tests/resume_e2e.py [--keep]
 
@@ -14,9 +13,7 @@ import json, os, pathlib, shutil, subprocess, sys, tempfile, time
 
 KIT = (pathlib.Path(__file__).resolve().parent.parent / "kit").as_posix()
 ROOT = pathlib.Path(tempfile.mkdtemp(prefix="hdt-resume-"))
-HH = ROOT / "hermes-home"
-ENV = {**os.environ, "GIT_TERMINAL_PROMPT": "0", "PYTHONIOENCODING": "utf-8", "PYTHONDONTWRITEBYTECODE": "1",
-       "HERMES_HOME": HH.as_posix()}
+ENV = {**os.environ, "GIT_TERMINAL_PROMPT": "0", "PYTHONIOENCODING": "utf-8", "PYTHONDONTWRITEBYTECODE": "1"}
 results = []
 
 
@@ -27,24 +24,9 @@ def sh(cwd, *args, ok=True):
     return r
 
 
-def kit(cwd, script, *args, stdin=None):
-    r = subprocess.run([sys.executable, "-u", f"{KIT}/{script}", *args], cwd=cwd, capture_output=True, text=True,
-                       env=ENV, encoding="utf-8", errors="replace", input=stdin)
+def kit(cwd, script, *args):
+    r = sh(cwd, sys.executable, "-u", f"{KIT}/{script}", *args, ok=False)
     return r.returncode, (r.stdout + r.stderr).strip()
-
-
-def prepare(cwd, ticket):
-    rc, out = kit(cwd, "run-worker.py", "prepare", "dev", f"ticket: {ticket}")
-    rid = next((l.split()[1] for l in out.splitlines() if l.startswith("PREPARED ")), None)
-    return rc, out, rid
-
-
-def running_child(rid):
-    """What Hermes writes while a delegate child runs: a manifest naming the run in its goal, a fresh transcript."""
-    d = HH / "cache/delegation/live/deleg_test"; d.mkdir(parents=True, exist_ok=True)
-    (d / "task-0.log").write_text("12:00 tool | -> terminal(ls)\n")
-    (d / "manifest.json").write_text(json.dumps({"started": time.strftime("%Y-%m-%d %H:%M:%S"), "tasks": [
-        {"index": 0, "goal": f"[hdt] {rid}: dev worker", "log": str(d / "task-0.log"), "status": "running"}]}))
 
 
 def check(name, cond, detail=""):
@@ -93,7 +75,7 @@ def setup():
     (a / "calc.py").write_text("def add(a, b):\n    return a + b\n")
     (a / "test_calc.py").write_text("import unittest\nfrom calc import add\n\n\nclass T(unittest.TestCase):\n"
                                     "    def test_add(self):\n        self.assertEqual(add(2, 3), 5)\n")
-    (a / ".team.json").write_text(json.dumps({"test": "python -m unittest -q", "options": {"dev": "standard"}}))
+    (a / ".team.json").write_text(json.dumps({"test": "python -m unittest -q"}))
     (a / ".gitignore").write_text("__pycache__/\n")
     sh(a, "git", "add", "-A"); sh(a, "git", "commit", "-q", "-m", "init"); sh(a, "git", "push", "-q", "origin", "main")
     sh(a, "git", "checkout", "-q", "-b", "feat-calc")
@@ -122,41 +104,43 @@ def run():
     check("scratch repo tracks tickets + decisions, not runs/", ".gitignore" in tracked and
           "f1/decisions.md" in tracked and not any(t.startswith("runs/") for t in tracked), str(tracked))
 
-    # ---- dev run on 01: prepare, the child's work (played here), finish
+    # ---- real dev run on 01
     t1 = iss / "01-mul.md"; t1.write_text(t1.read_text().replace("Status: todo", "Status: in-progress"))
     kit(a, "scratch.py", "commit", "01 in-progress")
-    rc, out, rid = prepare(a, ".scratch/f1/issues/01-mul.md")
-    check("A prepare 01", rc == 0 and rid, out)
-    (a / "calc.py").write_text((a / "calc.py").read_text() + "\n\ndef mul(a, b):\n    return a * b\n")
-    sh(a, "git", "commit", "-qam", "multiply (01-mul.md)")
-    sha = sh(a, "git", "rev-parse", "--short", "HEAD").stdout.strip()
-    rc, out = kit(a, "run-worker.py", "finish", rid, stdin=json.dumps({"verdict": "PASS", "summary": "mul", "sha": sha}))
-    check("A dev 01 PASS", rc == 0 and f"RESULT dev PASS {sha}" in out, last(out))
+    t0 = time.time()
+    rc, out = kit(a, "run-worker.py", "dev", "ticket: .scratch/f1/issues/01-mul.md")
+    check(f"A dev 01 PASS ({round(time.time() - t0)} s)", rc == 0 and "RESULT dev PASS" in out, last(out))
     log = (sc / "runs.log").read_text()
     check("runs.log line carries ticket=01-mul.md", "\tticket=01-mul.md" in log, log[-300:])
     check("worker lock removed after the run", not (sc / "runs/worker.lock").exists())
+    subj = sh(a, "git", "log", "-1", "--format=%s").stdout.strip()
+    check("dev commit subject ends with (01-mul.md)", subj.endswith("(01-mul.md)"), subj)
     t1.write_text(t1.read_text().replace("Status: in-progress", "Status: done"))
     kit(a, "scratch.py", "commit", "01 done")
 
-    # ---- dev on 02 with a running child: second prepare, switch and resume must wait; then stop
+    # ---- dev on 02 in the background: second dispatch, switch and resume must wait; then force-stop
     t2 = iss / "02-sub.md"; t2.write_text(t2.read_text().replace("Status: todo", "Status: in-progress"))
     kit(a, "scratch.py", "commit", "02 in-progress")
-    rc, out, rid2 = prepare(a, ".scratch/f1/issues/02-sub.md")
-    running_child(rid2)
+    bg = subprocess.Popen([sys.executable, "-u", f"{KIT}/run-worker.py", "dev", "ticket: .scratch/f1/issues/02-sub.md"],
+                          cwd=a, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=ENV,
+                          encoding="utf-8", errors="replace")
     lk = sc / "runs/worker.lock"
-    rc, out, _ = prepare(a, ".scratch/f1/issues/03-neg.md")
-    check("second prepare refused while a worker runs", rc == 2 and "still running" in out, last(out))
+    for _ in range(60):
+        time.sleep(1)
+        if lk.exists() and "worker_pid" in lk.read_text():
+            break
+    time.sleep(8)                                    # let the worker start working
+    rc, out = kit(a, "run-worker.py", "dev", "ticket: .scratch/f1/issues/03-neg.md")
+    check("second dispatch refused while a worker runs", rc == 2 and "already running" in out, last(out))
     rc, out = kit(a, "scratch.py", "switch")
-    check("switch refused while a run is open", rc == 1 and "SWITCH STOP a worker run is not finished" in out, last(out))
+    check("switch refused while a worker runs", rc == 1 and "SWITCH STOP a worker is running" in out, last(out))
     rc, out = kit(a, "scratch.py", "resume")
     check("resume during a run says wait", rc == 0 and "worker running" in out, last(out))
-    rc, out = kit(a, "scratch.py", "stop")
-    check("stop refuses while the child runs (the planner stops the child first)", rc == 1 and "still running" in out,
-          out)
-    rc, stop_out = kit(a, "scratch.py", "stop", "--force")
+    rc, stop_out = kit(a, "scratch.py", "stop")
+    bg_out = bg.communicate(timeout=120)[0]
     print("      stop said:\n" + indent(stop_out))
-    check("stop --force OK, the run finished as FAIL force-stopped",
-          rc == 0 and "STOP OK" in last(stop_out) and "RESULT dev FAIL force-stopped" in stop_out, stop_out)
+    check("stop OK", rc == 0 and "STOP OK" in last(stop_out), stop_out)
+    check("launcher RESULT is FAIL force-stopped", "RESULT dev FAIL force-stopped" in bg_out, last(bg_out))
     check("lock gone after stop", not lk.exists())
     dec = (sc / "f1/decisions.md").read_text()
     check("decisions.md has the force-stopped line, committed", "force-stopped dev 02-sub.md" in dec and

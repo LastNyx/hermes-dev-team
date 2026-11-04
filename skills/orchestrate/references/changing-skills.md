@@ -1,8 +1,8 @@
 # Changing the team skills
 
 Load before patching `orchestrate` (or any file under it), a role file, or the launcher. Worker details live in the
-team repo, not in a skill: `docs/backend-delegate.md` (what a delegate child can do, which guards apply). After a
-launcher change, run the no-model tests and the chat checklist in `docs/testing.md` (`tests/chat_check.py`).
+team repo, not in a skill: `docs/backend-claude.md` (allow-list rules, each measured). After a launcher change, and on
+a new machine: `python <team repo>/tests/backend_smoke.py` (calls a model) proves a real `claude -p` run.
 Workers may run the test command, which executes code the dev wrote. That hole remains; review before merge.
 
 - The team skills are linked into the team repo, so any `skill_manage` edit is an uncommitted change there. Before
@@ -17,10 +17,9 @@ Workers may run the test command, which executes code the dev wrote. That hole r
 
 ## Adding a role or a role rule
 
-- Ship the role prompt, the launcher wiring (tool rules, a guard), a row in TEAM.md, a line in `docs/design.md`, a
-  skill reference with its trigger row, and a test file plus a `chat_check.py` scenario run for real once; one grilled
-  design is one release.
-- Nothing blocks a delegate child: a new limit is a brief rule plus an after-run guard in `finish`.
+- Ship the role prompt, its JSON allow-list, the launcher wiring, a row in TEAM.md, a line in `docs/design.md`, a
+  skill reference with its trigger row, and a test file with at least one real run; one grilled design is one release.
+- Prefer an allow-list rule (blocks the call) plus an after-run guard (catches what slips through) over a prompt rule.
 - Don't grow back: when the planner skips a step, fix the instruction or accept the slip. Add code (a refusal, a WARN)
   only when a slip has cost real work more than once.
 - Each new role rule gets a toy repo where the wrong path is tempting, run for real; if the worker ignores a rule
