@@ -3,9 +3,8 @@
 
 The scratch folder (tickets, batches.md, reviews, decisions.md, drift.md, dev-notes.md, runs.log) is its own small git
 repo, separate from the product repo: `<repo>/.scratch/` for a single repo (the product repo already ignores it), the
-workspace scratch folder for a multi-repo workspace. `runs/` (briefs, run state, result JSON, the worker lock) stays out
-of it. Nothing here rebases, resets, stashes or force-pushes; only `merge` (parallel ticket branches) and `sync-main`
-merge.
+workspace scratch folder for a multi-repo workspace. `runs/` (result JSON, progress logs, prompts, the worker lock)
+stays out of it. Nothing here merges, rebases, resets, stashes or force-pushes.
 
 Usage (cwd = the project repo, or the workspace root / any of its repos):
     python <kit>/scratch.py init [--remote URL]     # git init the scratch folder (once per project); commits what exists
@@ -15,20 +14,19 @@ Usage (cwd = the project repo, or the workspace root / any of its repos):
     python <kit>/scratch.py decide <feature> "<text>"  # one line in <feature>/decisions.md, committed
     python <kit>/scratch.py status <feature> <NN> <status> [--verify "PASS|FAIL|SKIP: <text>"]
                                                     # set a ticket's Status (never by hand); records the Verify
-    python <kit>/scratch.py stop                    # after stopping the child: finish its run as force-stopped
+    python <kit>/scratch.py stop                    # force-stop the running worker; logs it in decisions.md
     python <kit>/scratch.py switch                  # push scratch + feature branch(es) for the other machine
     python <kit>/scratch.py sync-main [--apply]     # shared repo, between batches: merge origin/main into the branch
     python <kit>/scratch.py baseline <feature>      # before the first ticket: record what already fails on main
     python <kit>/scratch.py check-run begin|end     # trivial lane: the launcher's guards around the planner's own fix
-    python <kit>/scratch.py dispatch <feature> NN NN [--dry-run] [--option O]
-                                                    # parallel dev runs in pool worktrees: prepares one run per ticket
-    python <kit>/scratch.py merge <feature>         # after every run of the group is finished: merge in ticket order
+    python <kit>/scratch.py dispatch <feature> NN NN [--dry-run]
+                                                    # parallel dev workers in pool worktrees, merged in order (0.17.0)
 
 `decide` and `status` also write a `planner` line to runs.log (plannerlog.py), next to the workers' lines.
 
 Last line: `<COMMAND> OK ...` (exit 0) or `<COMMAND> STOP <reason>` (exit 1): a STOP needs the user.
 """
-import argparse, datetime, json, os, pathlib, re, subprocess, sys
+import argparse, datetime, json, os, pathlib, re, subprocess, sys, time
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import teamcfg  # noqa: E402
@@ -39,7 +37,7 @@ import suites  # noqa: E402
 import parallel  # noqa: E402
 
 ENV = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
-GITIGNORE = "# per-run files: briefs, run state, result JSON, the worker lock (runs.log is kept)\nruns/\n"
+GITIGNORE = "# per-run files: result JSON, progress logs, prompts, the worker lock (runs.log is kept)\nruns/\n"
 MAIN = ("main", "master")
 
 
@@ -182,8 +180,9 @@ def cmd_sync_main(a):
     On a conflict the merge is aborted and nothing changes: the user resolves it.
     """
     tc, scratch, repos = ctx()
-    if teamcfg.read_locks(scratch):
-        print("SYNC STOP a worker run is not finished; wait for it (or `resume`)"); return 1
+    lock, alive = teamcfg.read_lock(scratch)
+    if alive:
+        print("SYNC STOP a worker is running; wait for its exit notice"); return 1
     single = not tc["repos"]
     stop, report = [], []
     for name, repo in repos.items():
@@ -373,9 +372,9 @@ def cmd_check_run(a):
     protected = rw.PROTECTED + list(tc["cfg"].get("protected") or [])
     snap_file = scratch / "runs" / f"check-run-{repo.name}.json"
     if a.phase == "begin":
-        held = teamcfg.read_locks(scratch)
-        if held:
-            print(f"CHECK-RUN STOP a worker run is not finished ({held[0][0].get('run_id')}); wait for it")
+        held, alive = teamcfg.read_lock(scratch)
+        if alive:
+            print(f"CHECK-RUN STOP a worker is running ({held.get('role')} {held.get('ticket') or '-'}); wait for it")
             return 1
         branch = git(repo, "branch", "--show-current")
         if branch in MAIN:
@@ -384,13 +383,18 @@ def cmd_check_run(a):
             print("CHECK-RUN STOP the tree is dirty; commit or ask the user first"); return 1
         snap = rw.snapshot(protected)
         snap_file.parent.mkdir(parents=True, exist_ok=True)
-        snap_file.write_text(json.dumps(snap), encoding="utf-8")
+        snap_file.write_text(json.dumps({k: sorted(v) if isinstance(v, set) else v for k, v in snap.items()}),
+                             encoding="utf-8")
         print(f"CHECK-RUN OK begin on {branch} at {snap['head'][:8]}; make the fix, run the full suites, commit, then "
               "`check-run end`")
         return 0
     if not snap_file.is_file():
         print("CHECK-RUN STOP no `check-run begin` for this repo"); return 1
     snap = json.loads(snap_file.read_text(encoding="utf-8"))
+    for k in ("tracking", "locals"):
+        snap[k] = set(snap.get(k) or [])
+    # JSON turned the (mode, sha) tuples into lists; git_state() compares tuples
+    snap["git_state"] = {k: tuple(v) if isinstance(v, list) else v for k, v in (snap.get("git_state") or {}).items()}
     guards = rw.guards_after(snap, protected)
     if dirty(repo):
         guards.append("tree-dirty")
@@ -468,45 +472,50 @@ def cmd_status(a):
     return 0
 
 
-def finish_run(lock, why):
-    """Run the launcher's finish on an unfinished run (no answer): guards, runs.log, lock removed. Returns its RESULT
-    line (not printed here, so the caller's own last line stays last)."""
-    import contextlib, io
-    rw = launcher()
-    sp = pathlib.Path(lock["_path"]).parent / f"{lock.get('run_id')}.state.json"
-    if not sp.is_file():
-        pathlib.Path(lock["_path"]).unlink(missing_ok=True)
-        return f"no run state for {lock.get('run_id')}; lock removed, guards NOT checked"
-    with contextlib.redirect_stdout(io.StringIO()):
-        return rw.finish(lock.get("run_id"), "", forced=why, state_path=sp)[1]
-
-
 def cmd_stop(a):
-    """The kit cannot kill a delegate child: the planner stops it first (`delegate_task action=stop`, or the user's
-    Stop). This finishes every unfinished run as `force-stopped` (guards checked) and logs it in decisions.md."""
     tc, scratch, repos = ctx()
     locks = teamcfg.read_locks(scratch)
     if not locks:
-        print("STOP OK no worker run"); return 0
-    running = [l for l, s in locks if s == "running"]
-    if running and not a.force:
-        for l in running:
-            print(f"  {l.get('run_id')} ({l.get('ticket') or '-'}) still runs: stop its child first "
-                  "(delegate_task action=stop with its subagent id), then run this again")
-        print("STOP STOP a child is still running (`--force` finishes the run anyway)"); return 1
-    for lock, _ in locks:
-        print("  " + finish_run(lock, "force-stopped"))
-        feature, ticket = lock.get("feature") or "-", lock.get("ticket") or "-"
-        sha = None
-        if feature != "-" and (scratch / feature).is_dir():
-            sha = add_decision(scratch, feature, f"force-stopped {lock.get('role')} {ticket} (run {lock.get('run_id')});"
-                                                 " ticket left in-progress")
-        repo = repos.get(lock.get("repo") or "") or next(iter(repos.values()), None)
-        tree = dirty(repo) if repo else ""
-        print("  product tree: " + ("clean" if not tree else "DIRTY:\n" + "\n".join("    " + l for l in tree.splitlines())))
-        print(f"STOP OK {lock.get('role')} {ticket} finished as force-stopped" + (f"; decision committed {sha}" if sha else "")
-              + ("; next resume asks you about the dirty tree" if tree else "; next resume redispatches it"))
+        print("STOP OK no worker running"); return 0
+    live = [l for l, al in locks if al]
+    for l, al in locks:
+        if not al:
+            pathlib.Path(l["_path"]).unlink(missing_ok=True)
+    if not live:
+        print(f"STOP OK no worker running (stale lock from {locks[0][0].get('stamp')}, its launcher is gone)")
+        return 0
+    for lock in live[1:]:                                      # parallel slots: stop every one, report the first
+        stop_one(lock)
+    lock = live[0]
+    stop_one(lock)
+    t0 = time.time()
+    while time.time() - t0 < a.wait and teamcfg.read_lock(scratch)[1]:
+        time.sleep(1)
+    if teamcfg.read_lock(scratch)[1]:
+        print(f"STOP STOP the launcher (pid {lock.get('launcher_pid')}) is still running after {a.wait}s"); return 1
+    last = [l for l in ((scratch / "runs.log").read_text(encoding="utf-8").splitlines()
+                        if (scratch / "runs.log").is_file() else []) if l.startswith(lock.get("stamp", "?"))]
+    if last:
+        print("  runs.log: " + " | ".join(last[-1].split("\t")[1:4]))
+    feature, ticket = lock.get("feature") or "-", lock.get("ticket") or "-"
+    sha = None
+    if feature != "-" and (scratch / feature).is_dir():
+        sha = add_decision(scratch, feature, f"force-stopped {lock.get('role')} {ticket} (run {lock.get('stamp')}); "
+                                             "ticket left in-progress")
+    repo = repos.get(lock.get("repo") or "") or next(iter(repos.values()), None)
+    tree = dirty(repo) if repo else ""
+    print("  product tree: " + ("clean" if not tree else "DIRTY:\n" + "\n".join("    " + l for l in tree.splitlines())))
+    print(f"STOP OK {lock.get('role')} {ticket} stopped" + (f"; decision committed {sha}" if sha else "")
+          + ("; next resume asks you about the dirty tree" if tree else "; next resume redispatches it"))
     return 0
+
+
+def stop_one(lock):
+    lock["stop_requested"] = now()
+    pathlib.Path(lock["_path"]).write_text(json.dumps({k: v for k, v in lock.items() if k != "_path"}),
+                                           encoding="utf-8")
+    target = lock.get("worker_pid") or lock.get("launcher_pid")
+    print(f"  killed {lock.get('role')} {lock.get('ticket') or '-'} worker pid {target}: {teamcfg.kill_tree(target)}")
 
 
 def cmd_resume(a):
@@ -515,16 +524,18 @@ def cmd_resume(a):
     if not scratch.is_dir():
         print(f"RESUME STOP no scratch folder {scratch.as_posix()} (other machine: `scratch.py init --clone URL`)")
         return 1
-    locks = teamcfg.read_locks(scratch)
-    live = [(l, s) for l, s in locks if s in ("running", "prepared")]
-    if live:
-        lock, s = live[0]
-        print(f"RESUME OK worker {s}: {lock.get('run_id')} ({lock.get('ticket') or '-'}); "
-              + ("wait for its result" if s == "running" else "start its child (the DELEGATE line) or `scratch.py stop`"))
-        return 0
-    for lk, s in locks:                                        # D12: a run whose finish never ran (/new, app closed)
-        msgs.append(f"INTERRUPTED {lk.get('ticket') or lk.get('run_id')}: run {lk.get('run_id')} was never finished "
-                    f"(child {s}); finished now, guards checked: {finish_run(lk, 'interrupted')}")
+    lock, alive = teamcfg.read_lock(scratch)
+    if alive:
+        if not teamcfg.pid_alive(lock.get("launcher_pid")):
+            print(f"RESUME STOP orphaned worker: {lock.get('role')} {lock.get('ticket') or '-'} since "
+                  f"{lock.get('stamp')} still runs but its launcher is gone (no exit notice will come); ask the user, "
+                  "then `scratch.py stop`"); return 1
+        print(f"RESUME OK worker running: {lock.get('role')} {lock.get('ticket') or '-'} since {lock.get('stamp')}; "
+              "wait for its exit notice"); return 0
+    for lk, _ in teamcfg.read_locks(scratch):                  # all stale here (a live one returned above)
+        msgs.append(f"stale worker lock from {lk.get('stamp')} ({lk.get('role')} {lk.get('ticket')}): the "
+                    "launcher died; removed")
+        pathlib.Path(lk["_path"]).unlink(missing_ok=True)
     if is_repo_root(scratch):
         sha = commit_scratch(scratch, "resume: uncommitted scratch state")
         if sha:
@@ -571,15 +582,10 @@ def cmd_resume(a):
             for f in foreign_commits(repo):
                 msgs.append(f"WARN {rn} {br}: commit by someone else on the feature branch: {f} "
                             "(one feature branch per person; show the user)")
-        group = scratch / "runs" / "group.json"
-        if group.is_file() and json.loads(group.read_text(encoding="utf-8")).get("feature") == feat:
-            # an open parallel group: its runs are finished above; `merge` judges each verdict and merges the PASSes
-            msgs.append(f"{feat}: parallel group open: run `scratch.py merge {feat}` (merges PASS tickets, keeps the rest)")
-        else:
-            for rn, br in wanted.items():                      # parallel ticket branches left by an old crash
-                repo = repos.get(rn)
-                if repo is not None and git(repo, "branch", "--show-current") == br:
-                    pending_ticket_branches(repo, br, ts, msgs, stop)
+        for rn, br in wanted.items():                          # D12: parallel ticket branches left by a crash
+            repo = repos.get(rn)
+            if repo is not None and git(repo, "branch", "--show-current") == br:
+                pending_ticket_branches(repo, br, ts, msgs, stop)
         counts = {}
         for t in ts:
             counts[t["status"]] = counts.get(t["status"], 0) + 1
@@ -662,7 +668,7 @@ def cmd_dispatch(a):
         return 1
     max_w = min(preflight.max_workers(cfg) or 1, 3)
     if len(a.tickets) < 2:
-        print("DISPATCH STOP give at least two tickets (one ticket: the usual run-worker.py prepare dev)"); return 1
+        print("DISPATCH STOP give at least two tickets (one ticket: the usual run-worker.py dev)"); return 1
     if len(a.tickets) > max_w:
         print(f"DISPATCH STOP {len(a.tickets)} tickets but .team.json max_workers is {max_w} (at most 3)"); return 1
     if not preflight.has_setup(cfg):
@@ -670,10 +676,9 @@ def cmd_dispatch(a):
         return 1
     if not preflight.has_config(tc):
         print("DISPATCH STOP no .team.json found"); return 1
-    held = teamcfg.read_locks(scratch)
-    if held:
-        print(f"DISPATCH STOP a worker run is not finished ({held[0][0].get('run_id')}); wait for it or `resume`")
-        return 1
+    held, alive = teamcfg.read_lock(scratch)
+    if alive:
+        print(f"DISPATCH STOP a worker is running ({held.get('role')} {held.get('ticket') or '-'})"); return 1
     fd_tickets = tickets(fd)
     items, seams, repo_names, branches = [], [], set(), set()
     group = {nn.split("-")[0] for nn in a.tickets}
@@ -686,8 +691,8 @@ def cmd_dispatch(a):
         if st not in ("todo", "in-progress"):
             print(f"DISPATCH STOP {t.name} is {st} (only todo or in-progress tickets run)"); return 1
         if field(text, "Blocked by") not in (None, "None", "none", "-"):
-            # `review` counts as done: `merge` merges every PASS ticket into the feature branch before the planner sets
-            # review, so a ticket in review is merged
+            # `review` counts as done, because dispatch merges every PASS ticket into the
+            # feature branch before it returns (the planner sets review afterwards), so a ticket in review is merged
             by_num = {}
             for x in fd_tickets:
                 by_num.setdefault(tk.number(x["path"]), []).append((x["path"], {"Status": x["status"]}))
@@ -719,84 +724,41 @@ def cmd_dispatch(a):
         text, crlf = pl.read(t)
         if field(text, "Status") != "in-progress":
             pl.write(t, set_status(text, "in-progress"), crlf)
-    group, err = parallel.prepare_group(repo, br, [(nn, t) for nn, t in items], tc["source"], rn, cfg["setup"],
-                                        scratch / "runs", option=a.option, say=print)
-    group = group or {"runs": []}
-    group.update(feature=a.feature, repo_name=rn)
-    if err:
-        for r in group["runs"]:                                 # undo the runs prepared before the failure
-            lk = teamcfg.lock_path(scratch, group["runs"].index(r) + 1)
-            if lk.is_file():
-                d = json.loads(lk.read_text(encoding="utf-8")); d["_path"] = str(lk)
-                print("  " + finish_run(d, "dispatch-failed"))
-        sha = commit_scratch(scratch, f"dispatch {' '.join(nn for nn, _ in items)} failed")
-        print(f"DISPATCH STOP {err}" + (f"; scratch committed {sha}" if sha else "")); return 1
-    (scratch / "runs" / "group.json").write_text(json.dumps(group), encoding="utf-8")
-    sha = commit_scratch(scratch, f"dispatch {' '.join(nn for nn, _ in items)} (parallel)")
-    for r in group["runs"]:
-        print("DELEGATE " + json.dumps(r["task"]))
-    print(f"DISPATCH OK {len(group['runs'])} runs prepared ({' '.join(r['run_id'] for r in group['runs'])}): start "
-          "them in ONE delegate_task call (tasks = the DELEGATE lines), finish each, then `scratch.py merge "
-          f"{a.feature}`" + (f"; scratch committed {sha}" if sha else ""))
-    return 0
-
-
-def cmd_merge(a):
-    """After a parallel group: every run finished -> merge each PASS ticket branch into the feature branch in ticket
-    order. Last line MERGE OK|STOP."""
-    tc, scratch, repos = ctx()
-    gf = scratch / "runs" / "group.json"
-    if not gf.is_file():
-        print("MERGE STOP no parallel group (runs/group.json); `dispatch` first"); return 1
-    group = json.loads(gf.read_text(encoding="utf-8"))
-    if group.get("feature") != a.feature:
-        print(f"MERGE STOP the open group is for feature {group.get('feature')}"); return 1
-    pending = []
-    for r in group["runs"]:
-        sp = scratch / "runs" / f"{r['run_id']}.state.json"
-        st = json.loads(sp.read_text(encoding="utf-8")) if sp.is_file() else {}
-        r["verdict"] = st.get("finished")
-        if not r["verdict"]:
-            pending.append(r["run_id"])
-    if pending:
-        print(f"MERGE STOP not finished yet: {' '.join(pending)} (`run-worker.py finish <run-id>` each, or `resume`)")
-        return 1
-    repo = pathlib.Path(group["repo"])
-    if git(repo, "branch", "--show-current") != group["branch"] or dirty(repo):
-        print(f"MERGE STOP {repo.name} must be on {group['branch']} with a clean tree"); return 1
-    report = parallel.merge_group(repo, group)
+    report = parallel.run_group(repo, br, [(nn, t) for nn, t in items], tc["source"], rn, cfg["setup"],
+                                scratch / "runs", extra=a.extra or [], say=print)
     paused, failed = False, []
     for nn, line, state, detail in report:
-        print(f"  {nn}: {line}")
+        print(line)
         if state == "merged":
-            print(f"  {nn}: merged into {group['branch']} -> {detail}")
-            pl.log(scratch, a.feature, f"NOTE parallel {nn} merged {detail}", "merge", ticket=None, repo=group["repo_name"])
+            print(f"  {nn}: merged into {br} -> {detail}")
+            pl.log(scratch, a.feature, f"NOTE parallel {nn} merged {detail}", "merge", ticket=None, repo=rn)
         elif state == "conflict":
-            print(f"  {nn}: FAIL conflict merging into {group['branch']} ({', '.join(detail)}); branch kept, redispatch "
-                  "from the new tip")
+            print(f"  {nn}: FAIL conflict merging into {br} ({', '.join(detail)}); branch kept, redispatch from the "
+                  "new tip")
             failed.append(nn)
         elif state == "empty":
             print(f"  {nn}: PASS but no commit on its branch; nothing merged")
             failed.append(nn)
         else:
             failed.append(nn)
-            paused = paused or "usage-limit" in (line or "")
-            print(f"  {nn}: not merged; branch {detail} kept")
-    gf.unlink()
-    sha = commit_scratch(scratch, f"merge {' '.join(r['nn'] for r in group['runs'])} (parallel)")
+            paused = paused or "usage-limit" in line
+            print(f"  {nn}: not merged; branch {detail} kept" if detail else f"  {nn}: not run")
+    sha = commit_scratch(scratch, f"dispatch {' '.join(nn for nn, _ in items)} (parallel)")
     tail = f"; scratch committed {sha}" if sha else ""
     if paused:
-        print(f"MERGE STOP usage limit hit: pause the queue until the limit resets{tail}"); return 1
+        print(f"DISPATCH STOP usage limit hit: pause the queue until the limit resets{tail}"); return 1
     if failed:
-        print(f"MERGE OK with failures: {' '.join(failed)} (fix or redispatch){tail}"); return 0
-    print(f"MERGE OK {len(report)} merged into {group['branch']}{tail}")
+        print(f"DISPATCH OK with failures: {' '.join(failed)} (fix or redispatch){tail}"); return 0
+    print(f"DISPATCH OK {len(items)} merged into {br}{tail}")
     return 0
 
 
 def cmd_switch(a):
     tc, scratch, repos = ctx()
-    if teamcfg.read_locks(scratch):
-        print("SWITCH STOP a worker run is not finished; wait for it, or `scratch.py stop` / `resume` first"); return 1
+    lock, alive = teamcfg.read_lock(scratch)
+    if alive:
+        print(f"SWITCH STOP a worker is running ({lock.get('role')} {lock.get('ticket') or '-'}); wait for its exit "
+              "notice, or `scratch.py stop` first"); return 1
     stop, warn, plan = [], [], []
     for name, repo in repos.items():
         br = git(repo, "branch", "--show-current")
@@ -852,7 +814,7 @@ def main():
     p = sub.add_parser("decide"); p.add_argument("feature"); p.add_argument("text")
     p = sub.add_parser("status"); p.add_argument("feature"); p.add_argument("ticket"); p.add_argument("status")
     p.add_argument("--verify")
-    p = sub.add_parser("stop"); p.add_argument("--force", action="store_true")
+    p = sub.add_parser("stop"); p.add_argument("--wait", type=int, default=60)
     sub.add_parser("switch")
     p = sub.add_parser("sync-main"); p.add_argument("--apply", action="store_true")
     p = sub.add_parser("baseline"); p.add_argument("feature"); p.add_argument("--force", action="store_true")
@@ -860,12 +822,11 @@ def main():
     p = sub.add_parser("check-run"); p.add_argument("phase", choices=["begin", "end"])
     p = sub.add_parser("dispatch"); p.add_argument("feature"); p.add_argument("tickets", nargs="+")
     p.add_argument("--dry-run", action="store_true")
-    p.add_argument("--option", help="delegate model option for every run (default: .team.json options.dev)")
-    p = sub.add_parser("merge"); p.add_argument("feature")
+    p.add_argument("--extra", nargs=argparse.REMAINDER, help="passed on to every run-worker.py (e.g. --model sonnet)")
     a = ap.parse_args()
     return {"init": cmd_init, "resume": cmd_resume, "commit": cmd_commit, "decide": cmd_decide, "stop": cmd_stop,
             "switch": cmd_switch, "sync-main": cmd_sync_main, "baseline": cmd_baseline, "status": cmd_status,
-            "check-run": cmd_check_run, "dispatch": cmd_dispatch, "merge": cmd_merge}[a.cmd](a)
+            "check-run": cmd_check_run, "dispatch": cmd_dispatch}[a.cmd](a)
 
 
 if __name__ == "__main__":

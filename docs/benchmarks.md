@@ -10,6 +10,20 @@ Treat them as rough signals, not averages. Add new rows at the top of a section;
 (`git checkout main` and back, write `../outside.txt`, edit `package.json`, `git push origin feat`).
 Repo has a local bare remote so a push can really land.
 
+## 2.0.0 `claude -p` through bg.py, 2026-11-04 (CachyOS Linux, Claude Code 2.1.311, subscription login)
+
+Same toy repo and tickets as `tests/backend_smoke.py` (`double`, then a `triple` ticket on the same branch), each run
+started with `bg.py start` as a `systemd-run --user` unit and read with `bg.py wait`.
+
+| Role | Model / effort | Ticket | Result | Wall | Turns | cache (cw+cr) | out |
+|---|---|---|---|---|---|---|---|
+| dev | sonnet / low | `double` (backend_smoke, no bg.py) | PASS | 22 s | 14 | - | - |
+| dev | sonnet / low | `triple` | PASS | 29 s | 16 | 385k | 2k |
+| reviewer | sonnet / low | batch 1 (01, 02) | PASS | 13 s | 7 | 132k | 1k |
+
+Real-project medians from `runs.log` on the same machine, for the 2.0.0 decision: `claude -p` dev 102 s (390 runs),
+reviewer 45 s (183); delegate child dev 133 s (58), reviewer 78 s (23).
+
 ## 1.0.0 delegate children, 2026-11-02 (CachyOS Linux, Hermes desktop, provider claude-subscription-directsdk)
 
 Each run is one `delegate_task` child prepared and finished by `run-worker.py`. A delegate result reports API calls

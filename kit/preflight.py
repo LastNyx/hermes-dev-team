@@ -1,6 +1,5 @@
-"""The conditions `scratch.py dispatch` needs before it prepares a parallel group (no I/O).
-
-`cfg` is `teamcfg.load()["cfg"]`, `tc` the whole `teamcfg.load()` result.
+"""The conditions `scratch.py dispatch` needs before it starts a parallel group (no I/O).
+ `cfg` is `teamcfg.load()["cfg"]`, `tc` the whole `teamcfg.load()` result.
 """
 
 

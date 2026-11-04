@@ -5,6 +5,33 @@ mark an entry **action** when another machine must do something (re-run `link-sk
 
 Format: version, date, then one line per change, naming the file.
 
+## 2.0.0 - 2026-11-04
+
+Workers are `claude -p` again (grill log `docs/open/claude-workers.md` D21-D26). The delegate-child kit is tag `v1.0.0`.
+Why: on real projects a delegate dev run took a median 133 s vs 102 s for `claude -p`, a reviewer 78 s vs 45 s (with
+runs up to 15 min), every child blocked the planner's turn, and the skills guard failed runs because of Hermes' curator.
+
+**action (every machine):** `git pull`, `python kit/link-skills.py --apply`, start a NEW Hermes session (orchestrate
+2.0.0); `claude` installed and logged in (`claude auth status`). **action (every project):** `.team.json` loses
+`options`; the launcher refuses it and prints the replacement, e.g. `"models": {"dev": "sonnet", "reviewer": "sonnet",
+"docs": "haiku", "researcher": "sonnet"}`; the planner writes it on your yes.
+
+- Restored from `v0.18.3`: `kit/backends.py` (Claude only), `kit/roles/*.json` allow-lists, `kit/git-ro.py`,
+  `kit/run-worker.py <role> "<prompt>"` (one call, guards after the run), `scratch.py stop` killing the worker tree,
+  `scratch.py dispatch` running up to 3 workers and merging, `docs/backend-claude.md`, tests `backend_smoke`,
+  `permission_paths`, `parallel_real`. `dispatch` caps `max_workers` at 3.
+- New `kit/bg.py`: `start` runs `run-worker.py` or `scratch.py dispatch` detached (`systemd-run --user --collect`, else a
+  detached process), `wait <id>` returns the RESULT lines or `BG RUNNING` within about 5 minutes, `status` lists jobs.
+- `kit/run-worker.py`: `options`, `backend` and `hermes_*` keys refuse the run with a replacement JSON. No progress log
+  file: progress lines go to stdout (bg.py's `.out` file).
+- Not restored: the kanban dispatcher, the headless hermes backend, the progress log, the hermes-dev-watch contract,
+  the `skills-changed` guard. Removed with the delegate kit: `prepare`/`finish`, `scratch.py merge`, run state files,
+  tests `delegate_runs`, `chat_check`.
+- `skills/orchestrate` 2.0.0: steps 4, 4b, 8, 9 use `bg.py start` + `bg.py wait`; config and switching references updated.
+- Tests: new `tests/claude_config.py` (19 checks: old-key refusal, bg.py in process and systemd mode, a parallel group
+  through bg.py); `kit_shared` checks stale and live locks instead of the dispatcher. Real runs on this release:
+  `backend_smoke` 5/5 (dev PASS 22 s); through `bg.py` (systemd): dev PASS 29 s, reviewer PASS 13 s.
+
 ## 1.0.0 - 2026-11-02
 
 Workers are Hermes `delegate_task` subagents (grill log `docs/open/delegate-workers.md` D1-D20). The last version with

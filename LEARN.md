@@ -10,10 +10,9 @@ Human: clone this repo, then paste the block below into Hermes, replacing `<REPO
 Learn the hermes-dev-team repo at <REPO>. Do these steps in order and stop to ask me if one fails.
 
 1. Read <REPO>/README.md, TEAM.md, CHANGELOG.md, and docs/design.md. Do not run anything yet.
-2. Check prerequisites and report each version: `hermes --version`, `python --version`, `git --version`. Workers are
-   your own `delegate_task` children: confirm you have the delegate_task tool, and list the model options your
-   delegation config offers (projects' `.team.json` `options` name them, e.g. fast/standard/deep). If there are none,
-   tell me; never edit Hermes config yourself.
+2. Check prerequisites and report each version: `claude --version` (2.1.296 or newer), `python --version`, `git --version`.
+   `claude` must be installed and logged in: check `claude auth status`. If it is missing or logged out, ask me to
+   run `claude auth login`. Never handle credentials yourself.
 3. Skills: run `python <REPO>/kit/link-skills.py` (dry run) and show me its output.
    - Lines "would ... link" are safe. Run it again with `--apply`.
    - A "SKIP ... local copy differs" line means my local skill grew. Show me the diff between my copy and
@@ -27,15 +26,13 @@ Learn the hermes-dev-team repo at <REPO>. Do these steps in order and stop to as
      Never copy them into <REPO>, never edit them.
    Then confirm with skills_list that orchestrate, grill-with-docs, grilling,
    domain-modeling, and to-tickets appear, and that grill-with-docs and to-tickets are NOT links into <REPO>.
-4. Save one memory fact: "hermes-dev-team kit is at <REPO>/kit; workers are delegate_task children prepared and
-   checked by `python <REPO>/kit/run-worker.py prepare|finish`;
+4. Save one memory fact: "hermes-dev-team kit is at <REPO>/kit; workers run via `python <REPO>/kit/run-worker.py`;
    team skills are linked into the repo, so skill edits show in `git -C <REPO> status`; agent commits never carry a
    Co-Authored-By trailer." Replace any older entry about hermes-dev-team instead of adding a second.
 5. Smoke test in a throwaway git repo under your scratch directory (never in <REPO> or a real project):
-   create main with one file and a `.team.json` of `{"test": "true", "options": {"docs": "fast"}}`, create branch
-   `smoke`, then run `python <REPO>/kit/run-worker.py prepare docs "feature: .scratch/none"`, delegate the DELEGATE
-   line exactly as printed, pipe the child's answer into `python <REPO>/kit/run-worker.py finish <run-id>`, and report
-   the RESULT line. PASS or a FAIL that names a missing feature folder both prove the kit works; an ERROR line or a
+   create main with one file, create branch `smoke`, then run
+   `python <REPO>/kit/run-worker.py docs "feature: .scratch/none"` and report the RESULT line.
+   PASS or a FAIL that names a missing feature folder both prove the launcher works; an ERROR line or a
    traceback does not. Delete the throwaway repo afterwards (cd out of it first).
 6. Report in at most 8 lines: versions, skills linked, the memory saved, and the smoke result.
 7. Research home: tell me the researcher keeps clones and findings in `HDT_RESEARCH_HOME` (else `~/research`; keep

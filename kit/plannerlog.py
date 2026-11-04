@@ -8,7 +8,7 @@ A planner line has the same shape as a worker's (docs/design.md "runs.log"), so 
 
 Verdicts: `PASS|FAIL|SKIP verify NN: <text>` for a status change with `--verify`, `NOTE status NN <status>` or
 `NOTE decide: <text>` otherwise, so a NOTE never counts as a pass. `<secs>` is the time since the feature's previous
-planner line, 0 for the first one or after a gap of more than GAP_HOURS (a new session).
+planner line, 0 for the first one or after a gap of more than GAP_HOURS (a new session). There is no progress log.
 """
 import datetime, pathlib, re, sys
 
