@@ -1,7 +1,7 @@
 ---
 name: orchestrate
 description: Run dev, reviewer, docs, researcher workers; verify results.
-version: 2.1.0
+version: 2.1.1
 author: hermes-dev-team contributors
 license: MIT
 platforms: [linux, macos, windows]
@@ -58,7 +58,7 @@ Load a reference with `skill_view(name="orchestrate", file_path="references/<fil
    - `REDISPATCH` (no commit, clean tree): step 4 with that ticket.
    - `ASK`, `RESUME STOP`, `DIVERGED`: show the user the lines and wait. Never reset, stash, merge, rebase or commit
      worker code to get past it (only exception: step 5's commit on the user's explicit yes).
-   - `worker running`: wait for its exit notice.
+   - `worker running`: its step-4 watcher wakes you when it ends; else `bg.py status`.
    Follow `decisions.md` (what the user decided in chat). Tickets, reviews, `runs.log` and git are the rest of the state.
 1. **Branch.** Create the feature branch from main. Once per project, `python KIT/scratch.py init` makes the scratch
    folder its own git repo. Commit the glossary and ADRs on the branch as `docs: context` (not in a shared repo, not a
@@ -75,8 +75,12 @@ Load a reference with `skill_view(name="orchestrate", file_path="references/<fil
    test command from the ticket and the model from `.team.json`; never retype either. It prints `BG OK <id> ...`.
    Then `python KIT/bg.py wait <id>` (returns within about 5 minutes): `BG RUNNING` -> do other planner work
    (read the next ticket, verify an earlier one) or call `wait` again; `BG DONE <id> exit=<n>` with the RESULT line
-   above it -> step 5. Never `terminal(background=true)` for a worker (Hermes kills it with the chat), never pipe
-   the launcher into `head`/`tail`. Same for steps 8 and 9.
+   above it -> step 5. **Wake-up:** the unit sends no notice to the chat, so right after `start` also run
+   `terminal(background=true, notify=true)` with `python KIT/bg.py wait <id> --timeout 21600` (same cwd). It exits on
+   `BG DONE`, and that exit starts a new turn; then read the RESULT line with a plain `bg.py wait <id>`. Without it a
+   finished worker is only noticed when the user writes. The watcher is not the worker: if Hermes kills it, the worker
+   keeps running, so start a new watcher. Never `terminal(background=true)` for the worker itself, never raw
+   `systemd-run` (no job file, no RESULT line), never pipe the launcher into `head`/`tail`. Same for steps 8 and 9.
 4b. **Parallel dev** (only when `.team.json` has `max_workers` > 1 and a `setup` list): when the batch has two or
    more `todo` tickets with no blockers between them and Seams that name different files, write them as one group in
    `batches.md` (`Parallel: 01 02 | 03`) and dispatch the group instead of step 3-4 for each:

@@ -5,6 +5,16 @@ mark an entry **action** when another machine must do something (re-run `link-sk
 
 Format: version, date, then one line per change, naming the file.
 
+## 2.1.1 - 2026-11-04
+
+Planner wakes when a worker ends. Why: `bg.py` runs the worker as a systemd unit that notifies nobody, and `bg.py wait`
+only blocks the planner's own call, so a planner that ended its turn after `start` never heard the worker finish.
+
+**action / re-copy (every machine):** `git pull`, start a NEW planner session. No `.team.json` change.
+
+- `skills/orchestrate` 2.1.1, step 4: after `bg.py start`, run `bg.py wait <id> --timeout 21600` as
+  `terminal(background=true, notify=true)`; its exit wakes the chat. Never raw `systemd-run`.
+
 ## 2.1.0 - 2026-11-04
 
 Step 6 verification goes to a read-only subagent (D61). Why: about 30% of a long Hermes planner chat's context was the
