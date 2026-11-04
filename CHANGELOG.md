@@ -5,6 +5,26 @@ mark an entry **action** when another machine must do something (re-run `link-sk
 
 Format: version, date, then one line per change, naming the file.
 
+## 2.1.0 - 2026-11-04
+
+Step 6 verification goes to a read-only subagent (D61). Why: about 30% of a long Hermes planner chat's context was the
+planner's own verification reads (`git log --stat`, `git show`/`git diff`, source, `tickets.py` tables, test output),
+and the kit is now also run with Claude Code as the planner, so the step names the tool for both.
+
+**action / re-copy (every machine):** `git pull` (linked skills update), start a NEW planner session (orchestrate
+2.1.0). No `.team.json` change.
+
+- `skills/orchestrate` 2.1.0, step 6: the planner briefs a read-only subagent (Hermes `delegate_task`, Claude Code the
+  Task/Agent tool, Explore or general-purpose) with the repo, ticket path, commit sha, Test command and Verify line; it
+  runs `git log --stat -1`, the test command, `git status --short`, reads the diff against the criteria and
+  `Not checked:`, and answers ONE line `PASS:` | `FAIL:` | `ASK:`. The planner keeps that line, checks the tree is
+  clean and HEAD unmoved, records it with `scratch.py status --verify`, and reads the diff only to explain an ASK or
+  FAIL. Verify lines needing a server, a database, a screen or the user's yes stay with the planner.
+- `references/lanes.md`, `references/tickets.md`: the verification subagent is not a feature-code subagent; who runs a
+  step-6 Verify.
+- `docs/design.md`: a rule row for D61; the rejected `delegate_task` workers note says the read-only verifier is a
+  different thing.
+
 ## 2.0.0 - 2026-11-04
 
 Workers are `claude -p` again (grill log `docs/open/claude-workers.md` D21-D26). The delegate-child kit is tag `v1.0.0`.

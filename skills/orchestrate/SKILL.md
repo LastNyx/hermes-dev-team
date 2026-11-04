@@ -1,7 +1,7 @@
 ---
 name: orchestrate
 description: Run dev, reviewer, docs, researcher workers; verify results.
-version: 2.0.0
+version: 2.1.0
 author: hermes-dev-team contributors
 license: MIT
 platforms: [linux, macos, windows]
@@ -93,11 +93,21 @@ Load a reference with `skill_view(name="orchestrate", file_path="references/<fil
    dev refuses a dirty tree). Show the user `git status --short`, `git diff --stat` and the reason; they commit or
    discard. You may commit only on their explicit yes for that diff, with a subject NOT ending `(<ticket file>)`.
    Then step 6 and `scratch.py decide`.
-6. **Verify**: `git log --stat -1`, the ticket's `Test command`, `git status --short`; for a bug ticket show the user
-   the Result's `Cause:` line. Then the ticket's `Verify:` line if you can run it alone now (`tickets.md`). Record the move with what you saw:
-   `scratch.py status <feature> <NN> review --verify "PASS|FAIL|SKIP: <what you saw>"` (quick lane: `done`; SKIP for a
-   check that waits). A gap you find becomes a fix ticket (`tickets.md`) plus a `decide` line. FAIL in the test
-   command: set `blocked`, tell the user the reason line.
+6. **Verify through a read-only subagent**; keep only its verdict line, not the diff, files or test output. Hermes:
+   `delegate_task` (it cannot narrow a child's tools, so the brief forbids edits); Claude Code: the Task/Agent tool,
+   an Explore or general-purpose agent told it must not edit files. This is not a worker: it writes nothing, so it
+   does not contradict "feature code only through the launcher" (`lanes.md`). Brief: the absolute repo path, the
+   ticket path, the commit sha, the ticket's `Test command` and `Verify:` line, and "Read-only: never edit, commit,
+   stash, checkout or delete. `cd <repo>`; run `git log --stat -1 <sha>`, the test command, `git status --short`;
+   read `git show <sha>` against the ticket's criteria and the Result's `Not checked:`; run the Verify line only if
+   it needs no running server, database or user's yes. Answer with ONE line: `PASS: <what was checked>` |
+   `FAIL: <reason>` | `ASK: <question for the user>`." Then check yourself that `git status --short` is clean and
+   HEAD has not moved (else the subagent wrote: tell the user). Read the diff yourself only to explain an ASK or FAIL
+   to the user; ASK: ask, record their answer. For a bug ticket show the user the Result's `Cause:` line. A Verify
+   that needs a running server, a database, a look at a screen or the user's say-so stays with you (`tickets.md`).
+   Record the verdict: `scratch.py status <feature> <NN> review --verify "PASS|FAIL|SKIP: <verdict text>"` (quick
+   lane: `done`; SKIP for a check that waits). A gap becomes a fix ticket (`tickets.md`) plus a `decide` line. FAIL
+   in the test command: set `blocked`, tell the user the reason line.
 7. Repeat 3-6 until the batch's tickets are all `review` (quick lane: all `done`, then step 10).
 8. **Review the batch** (full lane):
    `python KIT/bg.py start run-worker.py reviewer "feature: .scratch/<feature> batch: <b> tickets: NN,NN base: <sha> round: <n>"`, then `bg.py wait`.

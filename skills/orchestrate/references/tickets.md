@@ -31,7 +31,8 @@ criteria it ships the API and skips the screen. Name the browser check in `Verif
 unit tests, a headless browser test that starts its own server). Any other check goes on the `Verify:` line (else
 `None`) and you run it yourself:
 
-- **Before the review** (step 6), when you can run it alone: a browser with a stand-in bridge, a script, a sample file.
+- **Before the review** (step 6), when it runs alone: a browser with a stand-in bridge, a script, a sample file. The
+  verification subagent runs it; a look at a screen stays with you.
 - **After the review passes** (step 8), when it needs a running server, a database, or the user's say-so (ask first if
   a project rule requires it).
 

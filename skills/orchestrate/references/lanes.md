@@ -12,7 +12,8 @@ you decisions while away ("keep going", "decide yourself", "continue till finish
 | **Large / risky** | several seams; data or schema changes; auth, money, deletion, migrations; anything you would want a second pair of eyes on | FULL lane, as in the procedure. |
 
 When unsure between two lanes, take the larger one. Never write feature code yourself in a delegated subagent: it
-has no allow-list, runs on the planner's model and leaves no `runs.log` line; use the launcher.
+has no allow-list, runs on the planner's model and leaves no `runs.log` line; use the launcher. Step 6's read-only
+verification subagent is not this: it writes nothing and returns one verdict line.
 
 ## Trivial lane, step by step
 
